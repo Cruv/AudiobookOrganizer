@@ -11,6 +11,6 @@ services:
       - GOOGLE_BOOKS_API_KEY=
     volumes:
       - /home/cruv/DockerStorage/audiobookorganizer:/app/data
-      - /path/to/audiobooks:/audiobooks
-      - /path/to/organized:/organized
+      - /path/to/downloads:/downloads    # raw audiobook downloads to organize
+      - /path/to/library:/library        # organized library (Audiobookshelf/Chaptarr reads from here)
     restart: unless-stopped
