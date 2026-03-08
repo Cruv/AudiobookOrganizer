@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:wiki.servarr.com)",
+      "WebFetch(domain:hub.docker.com)",
+      "WebFetch(domain:wikiold.servarr.com)",
+      "WebFetch(domain:lemmy.sdf.org)",
+      "WebFetch(domain:lefthookdigital.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:www.audiobookshelf.org)",
+      "WebFetch(domain:openlibrary.org)",
+      "Bash(pip install -e \".[dev]\")",
+      "Bash(npm create vite@latest frontend -- --template react-ts)",
+      "Bash(npm install)",
+      "Bash(npm install -D tailwindcss @tailwindcss/vite)",
+      "Bash(npm install @tanstack/react-query react-router-dom lucide-react clsx tailwind-merge)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(python -c \"from app.main import app; print\\(''Backend imports OK''\\)\")",
+      "Bash(npm run build)",
+      "Bash(taskkill //F //IM uvicorn.exe)",
+      "Bash(pkill -f uvicorn)",
+      "Bash(git init)",
+      "Bash(git add -A)"
+    ]
+  }
+}
