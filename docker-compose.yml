@@ -1,6 +1,6 @@
 services:
   audiobook-organizer:
-    image: ghcr.io/cruv/audiobook-organizer:latest
+    image: ghcr.io/cruv/audiobookorganizer:latest
     container_name: AudiobookOrganizer
     ports:
       - "8081:80"
