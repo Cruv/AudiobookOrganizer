@@ -2,8 +2,10 @@
 
 Walks a source directory, finds folders containing audio files,
 reads tags, parses names, and creates database records.
+Performs auto-lookup for low-confidence books.
 """
 
+import asyncio
 import os
 from datetime import datetime, timezone
 
@@ -11,10 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.models.book import Book, BookFile
 from app.models.scan import Scan, ScannedFolder
-from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_tags
-from app.services.parser import ParsedMetadata, merge_with_tags, parse_folder_path
+from app.models.settings import UserSetting
+from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_folder_tags, read_tags
+from app.services.parser import ParsedMetadata, auto_match_score, merge_with_tags, parse_folder_path
 
 MAX_DEPTH = 6
+AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 0.70
+AUTO_APPLY_MATCH_THRESHOLD = 0.85
 
 
 def scan_directory(source_dir: str, db: Session) -> Scan:
@@ -38,13 +43,16 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
         scan.total_folders = len(audiobook_folders)
         db.commit()
 
+        books_for_lookup: list[Book] = []
+
         for folder_path in audiobook_folders:
             try:
-                _process_folder(folder_path, scan, db)
+                book = _process_folder(folder_path, scan, db)
                 scan.processed_folders += 1
                 db.commit()
+                if book and book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD:
+                    books_for_lookup.append(book)
             except Exception as e:
-                # Record error but continue scanning other folders
                 folder_name = os.path.basename(folder_path)
                 sf = ScannedFolder(
                     scan_id=scan.id,
@@ -57,6 +65,14 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
                 scan.processed_folders += 1
                 db.commit()
 
+        # Auto-lookup for low-confidence books
+        if books_for_lookup:
+            try:
+                asyncio.run(_auto_lookup_books(books_for_lookup, db))
+            except RuntimeError:
+                # Already in an event loop (e.g. during tests)
+                pass
+
         scan.status = "completed"
         scan.completed_at = datetime.now(timezone.utc)
         db.commit()
@@ -68,6 +84,61 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
         db.commit()
 
     return scan
+
+
+async def _auto_lookup_books(books: list[Book], db: Session) -> None:
+    """Auto-lookup metadata for low-confidence books and apply best matches."""
+    from app.services.lookup import lookup_book
+    from app.services.parser import clean_query
+
+    api_key_setting = db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
+    api_key = api_key_setting.value if api_key_setting else None
+
+    for book in books:
+        try:
+            query = clean_query(book.title, book.author)
+            if not query or len(query) < 3:
+                continue
+
+            results = await lookup_book(query, book.author, api_key, db)
+            if not results:
+                continue
+
+            # Score each result against parsed data
+            parsed = ParsedMetadata(
+                title=book.title,
+                author=book.author,
+                series=book.series,
+                series_position=book.series_position,
+                year=book.year,
+            )
+
+            best_score = 0.0
+            best_result = None
+            for result in results:
+                score = auto_match_score(parsed, result.title, result.author)
+                if score > best_score:
+                    best_score = score
+                    best_result = result
+
+            # Auto-apply if match is strong enough
+            if best_result and best_score >= AUTO_APPLY_MATCH_THRESHOLD:
+                if best_result.title:
+                    book.title = best_result.title
+                if best_result.author:
+                    book.author = best_result.author
+                if best_result.series and not book.series:
+                    book.series = best_result.series
+                if best_result.series_position and not book.series_position:
+                    book.series_position = best_result.series_position
+                if best_result.year and not book.year:
+                    book.year = best_result.year
+                book.source = f"auto:{best_result.provider}"
+                book.confidence = min(book.confidence + 0.20, 0.95)
+                db.commit()
+
+        except Exception:
+            continue
 
 
 def _find_audiobook_folders(source_dir: str) -> list[str]:
@@ -112,7 +183,7 @@ def _find_audiobook_folders(source_dir: str) -> list[str]:
     return filtered
 
 
-def _process_folder(folder_path: str, scan: Scan, db: Session) -> None:
+def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     """Process a single audiobook folder: parse name, read tags, create records."""
     folder_name = os.path.basename(folder_path)
 
@@ -136,18 +207,16 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> None:
     if not audio_files:
         scanned_folder.status = "skipped"
         scanned_folder.error_message = "No audio files found"
-        return
+        return None
 
     # Parse folder name
     parsed = parse_folder_path(folder_path)
 
-    # Read tags from first audio file to get representative metadata
-    first_tags: dict[str, str | None] = {}
-    if audio_files:
-        first_tags = read_tags(audio_files[0][0])
+    # Read consensus tags from multiple files
+    consensus_tags = read_folder_tags(folder_path)
 
-    # Merge parsed + tag data
-    parsed = merge_with_tags(parsed, first_tags)
+    # Merge parsed + consensus tag data
+    parsed = merge_with_tags(parsed, consensus_tags)
 
     # Create Book record
     book = Book(
@@ -157,13 +226,15 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> None:
         series=parsed.series,
         series_position=parsed.series_position,
         year=parsed.year,
+        narrator=parsed.narrator,
         source=parsed.source,
         confidence=parsed.confidence,
     )
     db.add(book)
     db.flush()
 
-    # Create BookFile records
+    # Create BookFile records (read individual tags for per-file data)
+    first_tags = read_tags(audio_files[0][0])
     for filepath, filename in audio_files:
         ext = os.path.splitext(filename)[1].lower().lstrip(".")
         file_size = os.path.getsize(filepath)
@@ -184,8 +255,5 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> None:
         )
         db.add(book_file)
 
-    # Update narrator from tags if available
-    if first_tags.get("narrator") and not book.narrator:
-        book.narrator = first_tags["narrator"]
-
     scanned_folder.status = "parsed"
+    return book

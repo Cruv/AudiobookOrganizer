@@ -1,7 +1,8 @@
-"""Online metadata lookup via Google Books and OpenLibrary APIs."""
+"""Online metadata lookup via Google Books, OpenLibrary, and iTunes APIs."""
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.lookup_cache import LookupCache
 from app.schemas.book import LookupResult
+from app.services.parser import clean_query, fuzzy_match
 
 
 CACHE_DURATION_DAYS = 30
@@ -21,12 +23,12 @@ async def search_google_books(
     db: Session,
 ) -> list[LookupResult]:
     """Search Google Books API for matching books."""
+    cleaned = clean_query(title, author)
     query_parts = [f"intitle:{title}"]
     if author:
         query_parts.append(f"inauthor:{author}")
     query = "+".join(query_parts)
 
-    # Check cache
     cached = _get_cached(query, "google_books", db)
     if cached is not None:
         return cached
@@ -49,18 +51,15 @@ async def search_google_books(
             authors = vol.get("authors", [])
             published = vol.get("publishedDate", "")
 
-            # Extract series from subtitle or title
             series_name = None
             series_pos = None
             subtitle = vol.get("subtitle", "")
             if subtitle:
-                import re
                 series_match = re.search(
                     r"(?:Book|Vol(?:ume)?|#)\s*(\d+\.?\d*)", subtitle, re.IGNORECASE
                 )
                 if series_match:
                     series_pos = series_match.group(1)
-                    # Use the part before "Book N" as series name
                     series_name = subtitle[: series_match.start()].strip(" -–—:,")
 
             results.append(
@@ -96,7 +95,6 @@ async def search_openlibrary(
 
     query = f"title={title}&author={author or ''}"
 
-    # Check cache
     cached = _get_cached(query, "openlibrary", db)
     if cached is not None:
         return cached
@@ -141,20 +139,160 @@ async def search_openlibrary(
     return results
 
 
+async def search_itunes(
+    title: str,
+    author: str | None,
+    db: Session,
+) -> list[LookupResult]:
+    """Search iTunes/Apple Books API for audiobooks."""
+    query = clean_query(title, author)
+    if not query:
+        return []
+
+    cached = _get_cached(query, "itunes", db)
+    if cached is not None:
+        return cached
+
+    params: dict[str, str] = {
+        "term": query,
+        "media": "audiobook",
+        "limit": "5",
+    }
+
+    results: list[LookupResult] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                "https://itunes.apple.com/search", params=params
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        for item in data.get("results", []):
+            item_title = item.get("collectionName") or item.get("trackName")
+            item_author = item.get("artistName")
+            release_date = item.get("releaseDate", "")
+            year = release_date[:4] if len(release_date) >= 4 else None
+            description = item.get("description", "")
+            cover_url = item.get("artworkUrl100")
+
+            # Try to extract series info from title
+            series_name = None
+            series_pos = None
+            if item_title:
+                series_match = re.search(
+                    r",?\s*(?:Book|Vol(?:ume)?|#)\s*(\d+\.?\d*)",
+                    item_title,
+                    re.IGNORECASE,
+                )
+                if series_match:
+                    series_pos = series_match.group(1)
+                    clean_title = item_title[: series_match.start()].strip(" -–—:,")
+                    # Check if there's a colon-separated series
+                    colon_split = clean_title.split(":")
+                    if len(colon_split) == 2:
+                        series_name = colon_split[0].strip()
+                        item_title = colon_split[1].strip()
+                    else:
+                        item_title = clean_title
+
+                # Also check "Title (Series Name, Book N)" pattern
+                paren_match = re.search(
+                    r"\((.+?),?\s*(?:Book|#)\s*(\d+\.?\d*)\)",
+                    item_title,
+                    re.IGNORECASE,
+                )
+                if paren_match and not series_name:
+                    series_name = paren_match.group(1).strip()
+                    series_pos = paren_match.group(2)
+                    item_title = item_title[: paren_match.start()].strip()
+
+                # Strip "(Unabridged)" suffix
+                item_title = re.sub(r"\s*\(Unabridged\)", "", item_title, flags=re.IGNORECASE).strip()
+
+            results.append(
+                LookupResult(
+                    provider="itunes",
+                    title=item_title,
+                    author=item_author,
+                    series=series_name,
+                    series_position=series_pos,
+                    year=year,
+                    description=description[:200] if description else None,
+                    cover_url=cover_url,
+                    confidence=0.90,  # Higher confidence — audiobook-specific
+                )
+            )
+
+    except Exception:
+        pass
+
+    _set_cached(query, "itunes", results, db)
+    return results
+
+
 async def lookup_book(
     title: str,
     author: str | None,
     api_key: str | None,
     db: Session,
 ) -> list[LookupResult]:
-    """Search both APIs and return merged results, best first."""
+    """Search all APIs and return deduplicated results, best first."""
     google_results = await search_google_books(title, author, api_key, db)
     ol_results = await search_openlibrary(title, author, db)
+    itunes_results = await search_itunes(title, author, db)
 
-    all_results = google_results + ol_results
+    all_results = itunes_results + google_results + ol_results
+
+    # Deduplicate by title+author similarity
+    deduped = _deduplicate_results(all_results)
+
     # Sort by confidence descending
-    all_results.sort(key=lambda r: r.confidence, reverse=True)
-    return all_results
+    deduped.sort(key=lambda r: r.confidence, reverse=True)
+    return deduped
+
+
+def _deduplicate_results(results: list[LookupResult]) -> list[LookupResult]:
+    """Remove duplicate results across providers, keeping highest confidence."""
+    seen: list[LookupResult] = []
+    for result in results:
+        is_dup = False
+        for existing in seen:
+            title_match = (
+                result.title
+                and existing.title
+                and fuzzy_match(result.title, existing.title)
+            )
+            author_match = (
+                result.author
+                and existing.author
+                and fuzzy_match(result.author, existing.author)
+            )
+            if title_match and author_match:
+                # Keep the one with higher confidence; merge missing fields
+                if result.confidence > existing.confidence:
+                    if not result.series and existing.series:
+                        result.series = existing.series
+                        result.series_position = existing.series_position
+                    if not result.year and existing.year:
+                        result.year = existing.year
+                    if not result.cover_url and existing.cover_url:
+                        result.cover_url = existing.cover_url
+                    seen.remove(existing)
+                    seen.append(result)
+                else:
+                    if not existing.series and result.series:
+                        existing.series = result.series
+                        existing.series_position = result.series_position
+                    if not existing.year and result.year:
+                        existing.year = result.year
+                    if not existing.cover_url and result.cover_url:
+                        existing.cover_url = result.cover_url
+                is_dup = True
+                break
+        if not is_dup:
+            seen.append(result)
+    return seen
 
 
 def _cache_key(query: str, provider: str) -> str:

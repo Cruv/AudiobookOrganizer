@@ -15,6 +15,7 @@ class ParsedMetadata:
     series: str | None = None
     series_position: str | None = None
     year: str | None = None
+    narrator: str | None = None
     confidence: float = 0.0
     source: str = "parsed"
 
@@ -29,9 +30,15 @@ JUNK_PATTERNS = [
     r"\b(?:audiobook|audio\s*book)\b",
     r"\b(?:narrated\s+by)\b",
     r"\b(?:hq|lq|high\s*quality)\b",
+    r"\b(?:retail|proper|repack)\b",
+    r"\b(?:complete\s+(?:series|collection))\b",
+    r"\b(?:graphic\s+audio)\b",
     r"\[.*?\]",
     r"\((?:mp3|m4b|flac|audiobook|unabridged|abridged|\d+\s*kbps).*?\)",
 ]
+
+# Leading track/book numbers: "01 ", "01. ", "01 - "
+LEADING_NUMBER_PATTERN = re.compile(r"^\d{1,3}(?:\s*[-–—.)\]]\s*|\s+)(?=[A-Z])")
 
 YEAR_PATTERN = re.compile(r"(?:^|\D)((?:19|20)\d{2})(?:\D|$)")
 
@@ -40,6 +47,27 @@ SERIES_POSITION_PATTERNS = [
         r"(?:Book|Vol(?:ume)?|Part|#|No\.?)\s*(\d+\.?\d*)", re.IGNORECASE
     ),
     re.compile(r"\b(\d+\.?\d*)\s*(?:of\s+\d+)\b", re.IGNORECASE),
+]
+
+# Narrator extraction: "narrated by Name" or "read by Name"
+NARRATOR_PATTERN = re.compile(
+    r"(?:narrated|read|performed)\s+by\s+([^,\-–—()\[\]]+)", re.IGNORECASE
+)
+
+# Values that indicate the tag field is generic/useless
+GENERIC_VALUES = re.compile(
+    r"^(track\s*\d*|unknown|various|untitled|artist|album|"
+    r"audiobook|chapter\s*\d*|disc\s*\d*|part\s*\d*|"
+    r"http[s]?://|www\.).*$",
+    re.IGNORECASE,
+)
+
+# Author names that are clearly not real people (franchises, publishers)
+SUSPECT_AUTHOR_PATTERNS = [
+    re.compile(r"^\d+$"),  # Pure numbers
+    re.compile(r"^.{1,2}$"),  # Too short
+    re.compile(r"^.{80,}$"),  # Too long
+    re.compile(r"(?:collection|complete|series|edition|publishing|books?$)", re.IGNORECASE),
 ]
 
 
@@ -55,6 +83,22 @@ def _clean_text(text: str) -> str:
     # Collapse whitespace
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
+
+
+def _strip_leading_number(text: str) -> str:
+    """Strip leading track/book numbers like '01 ', '01. ', '01 - '."""
+    return LEADING_NUMBER_PATTERN.sub("", text)
+
+
+def _extract_narrator(text: str) -> tuple[str | None, str]:
+    """Extract narrator from 'narrated by X' patterns."""
+    match = NARRATOR_PATTERN.search(text)
+    if match:
+        narrator = match.group(1).strip()
+        cleaned = text[: match.start()] + text[match.end() :]
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return narrator, cleaned
+    return None, text
 
 
 def _extract_year(text: str) -> tuple[str | None, str]:
@@ -88,6 +132,23 @@ def _sanitize_name(name: str) -> str:
     """Clean up a name after extraction - remove leading/trailing separators."""
     name = re.sub(r"^[\s\-–—,.:]+|[\s\-–—,.:]+$", "", name)
     return name.strip()
+
+
+def _is_generic_value(value: str | None) -> bool:
+    """Check if a value is generic/useless metadata."""
+    if not value:
+        return True
+    return bool(GENERIC_VALUES.match(value.strip()))
+
+
+def _is_suspect_author(author: str | None) -> bool:
+    """Check if an author name looks invalid (franchise, publisher, etc.)."""
+    if not author:
+        return True
+    for pattern in SUSPECT_AUTHOR_PATTERNS:
+        if pattern.search(author):
+            return True
+    return False
 
 
 def _strategy_author_series_title(text: str) -> ParsedMetadata | None:
@@ -172,6 +233,21 @@ def _strategy_series_num_title_author(text: str) -> ParsedMetadata | None:
     return None
 
 
+def _strategy_title_dash_author(text: str) -> ParsedMetadata | None:
+    """Pattern: Title - Author (reverse of author-title, tried last)."""
+    pattern = re.compile(r"^(?P<title>.+?)\s*[-–—]\s*(?P<author>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)$")
+    match = pattern.match(text)
+    if match:
+        author = _sanitize_name(match.group("author"))
+        title = _sanitize_name(match.group("title"))
+        # Only match if author looks like a real name (First Last)
+        if author and title and not _is_suspect_author(author):
+            return ParsedMetadata(
+                title=title, author=author, confidence=0.70
+            )
+    return None
+
+
 def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
     """Extract metadata from nested folder structure: Author/Series/Book or Author/Book."""
     parts = folder_path.replace("\\", "/").split("/")
@@ -190,7 +266,7 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
         # Check if the middle part looks like a series (short, might have numbers)
         author = _sanitize_name(_clean_text(author_candidate))
         series = _sanitize_name(_clean_text(series_candidate))
-        title = _sanitize_name(_clean_text(title_candidate))
+        title = _sanitize_name(_clean_text(_strip_leading_number(title_candidate)))
 
         if author and series and title:
             pos, series_clean = _extract_series_position(title)
@@ -214,7 +290,7 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
         author_candidate = parts[-2]
         title_candidate = parts[-1]
         author = _sanitize_name(_clean_text(author_candidate))
-        title = _sanitize_name(_clean_text(title_candidate))
+        title = _sanitize_name(_clean_text(_strip_leading_number(title_candidate)))
         if author and title:
             return ParsedMetadata(
                 author=author, title=title, confidence=0.75
@@ -232,6 +308,12 @@ def parse_folder_path(folder_path: str) -> ParsedMetadata:
     leaf = folder_path.replace("\\", "/").rstrip("/").split("/")[-1]
     cleaned = _clean_text(leaf)
 
+    # Strip leading track/book numbers
+    cleaned = _strip_leading_number(cleaned)
+
+    # Extract narrator before other processing
+    narrator, cleaned = _extract_narrator(cleaned)
+
     # Extract year before applying strategies
     year, cleaned_no_year = _extract_year(cleaned)
 
@@ -248,6 +330,7 @@ def parse_folder_path(folder_path: str) -> ParsedMetadata:
         _strategy_author_title,
         _strategy_title_by_author,
         _strategy_series_num_title_author,
+        _strategy_title_dash_author,
     ]
 
     for strategy in strategies:
@@ -274,6 +357,10 @@ def parse_folder_path(folder_path: str) -> ParsedMetadata:
     # Pick the best result
     best = max(results, key=lambda r: r.confidence)
 
+    # Apply extracted narrator
+    if narrator and not best.narrator:
+        best.narrator = narrator
+
     # Apply year to the best result
     if year and not best.year:
         best.year = year
@@ -284,8 +371,8 @@ def parse_folder_path(folder_path: str) -> ParsedMetadata:
         best.confidence = max(best.confidence - 0.10, 0.0)
     if best.title and len(best.title) > 100:
         best.confidence = max(best.confidence - 0.10, 0.0)
-    if best.author and re.search(r"\d", best.author):
-        best.confidence = max(best.confidence - 0.20, 0.0)
+    if _is_suspect_author(best.author):
+        best.confidence = max(best.confidence - 0.15, 0.0)
 
     return best
 
@@ -298,52 +385,122 @@ def merge_with_tags(
     Tags generally win for author/title when present and non-generic.
     """
     tag_author = tags.get("author")
+    tag_title = tags.get("title")
     tag_album = tags.get("album")
     tag_year = tags.get("year")
+    tag_narrator = tags.get("narrator")
+
+    # Filter out generic tag values
+    if _is_generic_value(tag_author):
+        tag_author = None
+    if _is_generic_value(tag_title):
+        tag_title = None
+    if _is_generic_value(tag_album):
+        tag_album = None
+    if _is_generic_value(tag_narrator):
+        tag_narrator = None
 
     # Use tag author if it looks like a real name
-    if tag_author and not re.match(r"^(Track|Unknown|Various)\b", tag_author, re.IGNORECASE):
-        if parsed.author and _fuzzy_match(parsed.author, tag_author):
+    if tag_author:
+        if parsed.author and fuzzy_match(parsed.author, tag_author):
             parsed.confidence = min(parsed.confidence + 0.10, 1.0)
-        elif not parsed.author:
+        elif not parsed.author or _is_suspect_author(parsed.author):
             parsed.author = tag_author
+            parsed.source = "tag"
             parsed.confidence = min(parsed.confidence + 0.05, 1.0)
         else:
-            # Tag and parsed disagree - prefer tag
+            # Tag and parsed disagree - prefer tag for author
             parsed.author = tag_author
             parsed.source = "tag"
 
-    # Use tag album as title if it looks real
-    if tag_album and not re.match(r"^(Track|Unknown|Untitled)\b", tag_album, re.IGNORECASE):
-        if parsed.title and _fuzzy_match(parsed.title, tag_album):
+    # Use tag album as title if it looks real (album is usually the book title)
+    if tag_album:
+        if parsed.title and fuzzy_match(parsed.title, tag_album):
             parsed.confidence = min(parsed.confidence + 0.10, 1.0)
         elif not parsed.title:
             parsed.title = tag_album
             parsed.confidence = min(parsed.confidence + 0.05, 1.0)
 
+    # Use individual track title to extract series info
+    if tag_title and tag_album and tag_title != tag_album:
+        # If title has series info the album doesn't, try to extract it
+        if not parsed.series:
+            pos, _ = _extract_series_position(tag_title)
+            if pos:
+                parsed.series_position = pos
+
     # Use tag year if we don't have one
     if tag_year and not parsed.year:
-        parsed.year = tag_year
-        parsed.confidence = min(parsed.confidence + 0.05, 1.0)
+        # Clean year (might be "2020-01-15" format)
+        year_match = re.match(r"(\d{4})", tag_year)
+        if year_match:
+            parsed.year = year_match.group(1)
+            parsed.confidence = min(parsed.confidence + 0.05, 1.0)
+
+    # Use narrator from tags
+    if tag_narrator and not parsed.narrator:
+        parsed.narrator = tag_narrator
 
     return parsed
 
 
-def _fuzzy_match(a: str, b: str) -> bool:
-    """Simple fuzzy match - check if normalized strings are similar."""
+def clean_query(title: str | None, author: str | None = None) -> str:
+    """Clean a title/author for use as a search query.
+
+    Strips track numbers, junk tokens, year, and other noise to produce
+    a clean search string.
+    """
+    parts = []
+    if title:
+        q = _clean_text(title)
+        q = _strip_leading_number(q)
+        q = re.sub(r"\b\d{4}\b", "", q)  # strip years
+        q = re.sub(r"\s+", " ", q).strip()
+        if q:
+            parts.append(q)
+    if author and not _is_suspect_author(author):
+        parts.append(author)
+    return " ".join(parts)
+
+
+def fuzzy_match(a: str, b: str) -> bool:
+    """Check if two strings are similar using normalized comparison."""
     norm_a = re.sub(r"[^a-z0-9]", "", a.lower())
     norm_b = re.sub(r"[^a-z0-9]", "", b.lower())
     if not norm_a or not norm_b:
         return False
-    # Check if one contains the other or they share a long common prefix
+    # Check containment
     if norm_a in norm_b or norm_b in norm_a:
         return True
-    # Check prefix match (at least 80% of the shorter string)
-    min_len = min(len(norm_a), len(norm_b))
-    common = 0
-    for ca, cb in zip(norm_a, norm_b):
-        if ca == cb:
-            common += 1
-        else:
-            break
-    return common >= min_len * 0.8
+    # Levenshtein-like: check if edit distance is small relative to length
+    shorter, longer = (norm_a, norm_b) if len(norm_a) <= len(norm_b) else (norm_b, norm_a)
+    if len(shorter) < 3:
+        return shorter == longer
+    # Check common character ratio
+    common = sum(1 for c in shorter if c in longer)
+    ratio = common / len(shorter)
+    if ratio >= 0.8:
+        # Also check prefix overlap
+        prefix_len = 0
+        for ca, cb in zip(norm_a, norm_b):
+            if ca == cb:
+                prefix_len += 1
+            else:
+                break
+        return prefix_len >= min(len(norm_a), len(norm_b)) * 0.5
+    return False
+
+
+def auto_match_score(parsed: ParsedMetadata, result_title: str | None, result_author: str | None) -> float:
+    """Score how well a lookup result matches parsed metadata. 0.0 to 1.0."""
+    score = 0.0
+    if parsed.title and result_title:
+        if fuzzy_match(parsed.title, result_title):
+            score += 0.6
+    if parsed.author and result_author:
+        if fuzzy_match(parsed.author, result_author):
+            score += 0.4
+    elif not parsed.author and result_author:
+        # No parsed author - partial credit if title matched
+        score += 0.1
+    return score

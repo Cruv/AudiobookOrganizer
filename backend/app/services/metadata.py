@@ -1,12 +1,20 @@
-"""Audio file metadata reader using mutagen."""
+"""Audio file metadata reader using mutagen.
+
+Reads tags from multiple audio files in a folder and builds
+consensus metadata from the most common values.
+"""
 
 import os
+import re
+from collections import Counter
 
 from mutagen import File as MutagenFile
-from mutagen.easyid3 import EasyID3
 from mutagen.mp4 import MP4
 
 AUDIO_EXTENSIONS = {".mp3", ".m4b", ".m4a", ".flac", ".ogg", ".opus", ".wma", ".aac"}
+
+# Maximum number of files to sample for consensus
+MAX_SAMPLE_FILES = 10
 
 
 def is_audio_file(filepath: str) -> bool:
@@ -19,7 +27,7 @@ def read_tags(file_path: str) -> dict[str, str | None]:
     """Read audio tags from a file using mutagen.
 
     Returns a normalized dict with keys:
-    title, author, album, year, track, narrator, genre
+    title, author, album, year, track, narrator, genre, series, comment
     """
     result: dict[str, str | None] = {
         "title": None,
@@ -29,6 +37,8 @@ def read_tags(file_path: str) -> dict[str, str | None]:
         "track": None,
         "narrator": None,
         "genre": None,
+        "series": None,
+        "comment": None,
     }
 
     try:
@@ -47,8 +57,18 @@ def read_tags(file_path: str) -> dict[str, str | None]:
         result["track"] = _get_tag(audio, "tracknumber")
         result["genre"] = _get_tag(audio, "genre")
 
-        # Some audiobooks store narrator in composer field
-        result["narrator"] = _get_tag(audio, "composer")
+        # Narrator can be in composer, performer, or conductor fields
+        result["narrator"] = (
+            _get_tag(audio, "composer")
+            or _get_tag(audio, "performer")
+            or _get_tag(audio, "conductor")
+        )
+
+        # Some taggers use grouping or content group for series
+        result["series"] = _get_tag(audio, "grouping") or _get_tag(audio, "contentgroup")
+
+        # Comments may contain useful metadata
+        result["comment"] = _get_tag(audio, "comment")
 
     except Exception:
         pass
@@ -66,6 +86,8 @@ def _read_mp4_tags(file_path: str) -> dict[str, str | None]:
         "track": None,
         "narrator": None,
         "genre": None,
+        "series": None,
+        "comment": None,
     }
 
     try:
@@ -79,7 +101,19 @@ def _read_mp4_tags(file_path: str) -> dict[str, str | None]:
         result["album"] = _get_mp4_tag(tags, "\xa9alb")
         result["year"] = _get_mp4_tag(tags, "\xa9day")
         result["genre"] = _get_mp4_tag(tags, "\xa9gen")
-        result["narrator"] = _get_mp4_tag(tags, "\xa9wrt")  # composer/writer
+        result["comment"] = _get_mp4_tag(tags, "\xa9cmt")
+
+        # Narrator: try composer, then writer, then encoding tool comment
+        result["narrator"] = (
+            _get_mp4_tag(tags, "\xa9wrt")  # composer/writer
+            or _get_mp4_tag(tags, "----:com.apple.iTunes:NARRATOR")
+        )
+
+        # Series: try custom iTunes tags
+        result["series"] = (
+            _get_mp4_tag(tags, "----:com.apple.iTunes:SERIES")
+            or _get_mp4_tag(tags, "\xa9grp")  # grouping
+        )
 
         track = tags.get("trkn")
         if track and isinstance(track, list) and len(track) > 0:
@@ -89,6 +123,64 @@ def _read_mp4_tags(file_path: str) -> dict[str, str | None]:
         pass
 
     return result
+
+
+def read_folder_tags(folder_path: str) -> dict[str, str | None]:
+    """Read tags from multiple audio files in a folder and build consensus.
+
+    Samples up to MAX_SAMPLE_FILES files and uses the most common
+    non-empty values for each field.
+    """
+    audio_files = []
+    for filename in sorted(os.listdir(folder_path)):
+        filepath = os.path.join(folder_path, filename)
+        if os.path.isfile(filepath) and is_audio_file(filepath):
+            audio_files.append(filepath)
+            if len(audio_files) >= MAX_SAMPLE_FILES:
+                break
+
+    if not audio_files:
+        return {
+            "title": None, "author": None, "album": None, "year": None,
+            "track": None, "narrator": None, "genre": None, "series": None,
+            "comment": None,
+        }
+
+    # Collect all tag values across files
+    all_tags: list[dict[str, str | None]] = []
+    for filepath in audio_files:
+        all_tags.append(read_tags(filepath))
+
+    # Build consensus: most common non-empty value per field
+    consensus: dict[str, str | None] = {}
+    for field in ["author", "album", "year", "narrator", "genre", "series"]:
+        values = [t[field] for t in all_tags if t.get(field)]
+        if values:
+            counter = Counter(values)
+            consensus[field] = counter.most_common(1)[0][0]
+        else:
+            consensus[field] = None
+
+    # For title, use the album tag (individual titles are chapter names)
+    consensus["title"] = consensus.get("album")
+
+    # Track number: not useful for consensus
+    consensus["track"] = all_tags[0].get("track") if all_tags else None
+
+    # Comments: check first file's comment for metadata clues
+    consensus["comment"] = all_tags[0].get("comment") if all_tags else None
+
+    # Try to extract narrator from comment if not found in tags
+    if not consensus["narrator"] and consensus.get("comment"):
+        narrator_match = re.search(
+            r"(?:narrated|read|performed)\s+by\s+([^,\n]+)",
+            consensus["comment"],
+            re.IGNORECASE,
+        )
+        if narrator_match:
+            consensus["narrator"] = narrator_match.group(1).strip()
+
+    return consensus
 
 
 def _get_tag(audio, key: str) -> str | None:
