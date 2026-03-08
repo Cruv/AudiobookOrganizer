@@ -60,7 +60,11 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
         # Clean up the segment: remove dangling separators, empty parens/braces, etc.
         resolved = re.sub(r"\(\s*\)", "", resolved)
         resolved = re.sub(r"\{\s*\}", "", resolved)
+        # Collapse consecutive dashes (e.g. "Book - - Title" → "Book - Title")
+        resolved = re.sub(r"(?:\s*[-–—]\s*){2,}", " - ", resolved)
         resolved = re.sub(r"^\s*[-–—]\s*|\s*[-–—]\s*$", "", resolved)
+        # Remove "Book" prefix when no series position follows it
+        resolved = re.sub(r"^Book\s*[-–—]\s*", "", resolved)
         resolved = re.sub(r"\s+", " ", resolved).strip()
 
         # Only include segment if it has meaningful content

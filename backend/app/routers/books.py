@@ -48,7 +48,7 @@ def list_books(
     db: Session = Depends(get_db),
 ):
     """List books with optional filtering."""
-    query = db.query(Book).outerjoin(ScannedFolder)
+    query = db.query(Book).outerjoin(ScannedFolder).options(joinedload(Book.scanned_folder))
 
     if scan_id is not None:
         query = query.filter(ScannedFolder.scan_id == scan_id)
@@ -70,7 +70,7 @@ def list_books(
     else:
         query = query.order_by(Book.created_at.desc())
 
-    books = query.all()
+    books = query.unique().all()
 
     results = []
     for book in books:

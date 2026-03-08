@@ -68,6 +68,8 @@ SUSPECT_AUTHOR_PATTERNS = [
     re.compile(r"^.{1,2}$"),  # Too short
     re.compile(r"^.{80,}$"),  # Too long
     re.compile(r"(?:collection|complete|series|edition|publishing|books?$)", re.IGNORECASE),
+    re.compile(r"\d+[a-z]?\s*$", re.IGNORECASE),  # Ends with numbers (e.g. "Warhammer 40k")
+    re.compile(r"^(?:the|a|an)\s", re.IGNORECASE),  # Starts with article (e.g. "The Expanse")
 ]
 
 
