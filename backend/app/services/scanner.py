@@ -225,6 +225,12 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     if edition:
         parsed.edition = edition
 
+    # Normalize long GA narrator lists to "Full Cast"
+    if edition == "Graphic Audio" and parsed.narrator:
+        names = [n.strip() for n in parsed.narrator.split(",") if n.strip()]
+        if len(names) >= 4 or "Full Cast" in names:
+            parsed.narrator = "Full Cast"
+
     # Create Book record
     book = Book(
         scanned_folder_id=scanned_folder.id,

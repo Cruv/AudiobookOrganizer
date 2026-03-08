@@ -62,6 +62,14 @@ DRAMATIZED_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Multi-part indicators: "(Part 2 of 2)", "Part 1 of 3" - NOT series positions
+MULTI_PART_PATTERN = re.compile(
+    r"\(?\s*Part\s+\d+\s+of\s+\d+\s*\)?", re.IGNORECASE
+)
+
+# Bracket series position: [04], [01], [1] - book number in brackets
+BRACKET_POSITION_PATTERN = re.compile(r"\[(\d{1,3})\]")
+
 # Leading track/book numbers: "01 ", "01. ", "01 - "
 LEADING_NUMBER_PATTERN = re.compile(r"^\d{1,3}(?:\s*[-–—.)\]]\s*|\s+)(?=[A-Z])")
 
@@ -142,8 +150,27 @@ def _extract_year(text: str) -> tuple[str | None, str]:
     return None, text
 
 
+def _extract_bracket_position(text: str) -> tuple[str | None, str]:
+    """Extract series position from bracket notation like [04], [01].
+
+    Must be called BEFORE _clean_text which strips all [.*?] content.
+    """
+    match = BRACKET_POSITION_PATTERN.search(text)
+    if match:
+        pos = str(int(match.group(1)))  # "04" -> "4"
+        cleaned = text[: match.start()] + text[match.end() :]
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return pos, cleaned
+    return None, text
+
+
 def _extract_series_position(text: str) -> tuple[str | None, str]:
     """Extract series position number from text."""
+    # Strip multi-part indicators first - "(Part 2 of 2)" is NOT a series position
+    text = MULTI_PART_PATTERN.sub("", text)
+    text = re.sub(r"\(\s*\)", "", text)  # Clean leftover empty parens
+    text = re.sub(r"\s+", " ", text).strip()
+
     for pattern in SERIES_POSITION_PATTERNS:
         match = pattern.search(text)
         if match:
@@ -331,10 +358,13 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
         series_candidate = parts[-2]
         title_candidate = parts[-1]
 
+        # Extract bracket position (e.g. [04]) before junk cleaning removes it
+        bracket_pos, title_no_bracket = _extract_bracket_position(title_candidate)
+
         # Check if the middle part looks like a series (short, might have numbers)
         author = _sanitize_name(_clean_text(author_candidate))
         series = _sanitize_name(_clean_text(series_candidate))
-        title = _sanitize_name(_clean_text(_strip_leading_number(title_candidate)))
+        title = _sanitize_name(_clean_text(_strip_leading_number(title_no_bracket)))
 
         if author and series and title:
             pos, series_clean = _extract_series_position(title)
@@ -345,6 +375,10 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
                 title_clean = title
             else:
                 title_clean = series_clean
+
+            # Prefer bracket position [04] over text-extracted position
+            if bracket_pos:
+                pos = bracket_pos
 
             return ParsedMetadata(
                 author=author,
@@ -374,7 +408,11 @@ def parse_folder_path(folder_path: str) -> ParsedMetadata:
     """
     # Get just the leaf folder name for pattern matching
     leaf = folder_path.replace("\\", "/").rstrip("/").split("/")[-1]
-    cleaned = _clean_text(leaf)
+
+    # Extract bracket position (e.g. [04]) before junk cleaning removes it
+    bracket_pos, leaf_no_bracket = _extract_bracket_position(leaf)
+
+    cleaned = _clean_text(leaf_no_bracket)
 
     # Strip leading track/book numbers
     cleaned = _strip_leading_number(cleaned)
@@ -424,6 +462,10 @@ def parse_folder_path(folder_path: str) -> ParsedMetadata:
 
     # Pick the best result
     best = max(results, key=lambda r: r.confidence)
+
+    # Apply bracket position if no series position found
+    if bracket_pos and not best.series_position:
+        best.series_position = bracket_pos
 
     # Apply extracted narrator
     if narrator and not best.narrator:
