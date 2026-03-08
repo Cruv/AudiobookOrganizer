@@ -26,9 +26,12 @@ def sanitize_path_component(name: str) -> str:
 def build_output_path(book: Book, pattern: str, output_root: str) -> str:
     """Build the output directory path for a book using the token pattern.
 
-    Tokens: {Author}, {Series}, {SeriesPosition}, {Title}, {Year}, {Narrator}
+    Tokens: {Author}, {Series}, {SeriesPosition}, {Title}, {Year}, {Narrator}, {NarratorBraced}
     Segments containing only unresolved tokens are collapsed (removed).
     """
+    # {NarratorBraced} wraps narrator in curly braces for Audiobookshelf compatibility
+    narrator_braced = "{" + book.narrator + "}" if book.narrator else None
+
     token_map = {
         "{Author}": book.author,
         "{Series}": book.series,
@@ -36,6 +39,7 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
         "{Title}": book.title,
         "{Year}": book.year,
         "{Narrator}": book.narrator,
+        "{NarratorBraced}": narrator_braced,
     }
 
     segments = pattern.split("/")
@@ -53,8 +57,9 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
                 else:
                     resolved = resolved.replace(token, "")
 
-        # Clean up the segment: remove dangling separators, empty parens, etc.
+        # Clean up the segment: remove dangling separators, empty parens/braces, etc.
         resolved = re.sub(r"\(\s*\)", "", resolved)
+        resolved = re.sub(r"\{\s*\}", "", resolved)
         resolved = re.sub(r"^\s*[-–—]\s*|\s*[-–—]\s*$", "", resolved)
         resolved = re.sub(r"\s+", " ", resolved).strip()
 

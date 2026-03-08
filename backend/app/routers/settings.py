@@ -54,6 +54,7 @@ def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
 def preview_pattern(pattern: str = Query(...)):
     """Preview a naming pattern with sample data."""
     sample_tokens = {
+        "{NarratorBraced}": "{Michael Kramer}",
         "{Author}": "Brandon Sanderson",
         "{Series}": "Mistborn",
         "{SeriesPosition}": "1",
@@ -64,11 +65,12 @@ def preview_pattern(pattern: str = Query(...)):
 
     preview = pattern
     for token, value in sample_tokens.items():
-        preview = preview.replace(token, sanitize_path_component(value))
+        preview = preview.replace(token, value)
 
     # Clean up empty segments
     import re
     preview = re.sub(r"\(\s*\)", "", preview)
+    preview = re.sub(r"\{\s*\}", "", preview)
     preview = re.sub(r"^\s*[-–—]\s*|\s*[-–—]\s*$", "", preview)
     preview = re.sub(r"\s+", " ", preview).strip()
 

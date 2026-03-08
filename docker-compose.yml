@@ -1,18 +1,16 @@
 services:
   audiobook-organizer:
-    build: .
-    # image: ghcr.io/username/audiobook-organizer:latest
-    container_name: audiobook-organizer
+    image: ghcr.io/cruv/audiobook-organizer:latest
+    container_name: AudiobookOrganizer
     ports:
-      - "8080:80"
+      - "8081:80"
     environment:
       - PUID=1000
       - PGID=1000
-      - TZ=America/New_York
+      - TZ=America/Indiana/Indianapolis
       - GOOGLE_BOOKS_API_KEY=
-      - DATABASE_URL=sqlite:////app/data/audiobook_organizer.db
     volumes:
-      - ./data:/app/data
+      - /home/cruv/DockerStorage/audiobookorganizer:/app/data
       - /path/to/audiobooks:/audiobooks
       - /path/to/organized:/organized
     restart: unless-stopped

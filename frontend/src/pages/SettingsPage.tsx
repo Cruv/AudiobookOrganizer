@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { Save, RotateCcw } from 'lucide-react';
 import { useSettings, useUpdateSettings, usePreviewPattern } from '@/hooks/useSettings';
 
-const CHAPTARR_PRESET = '{Author}/{Series}/{SeriesPosition} - {Title} ({Year})';
+const PRESETS = {
+  chaptarr: '{Author}/{Series}/{SeriesPosition} - {Title} ({Year})',
+  audiobookshelf: '{Author}/{Series}/Book {SeriesPosition} - {Year} - {Title} {NarratorBraced}',
+};
 
 const TOKENS = [
   '{Author}',
@@ -11,6 +14,7 @@ const TOKENS = [
   '{Title}',
   '{Year}',
   '{Narrator}',
+  '{NarratorBraced}',
 ];
 
 export default function SettingsPage() {
@@ -79,14 +83,24 @@ export default function SettingsPage() {
         >
           <div className="flex items-center justify-between mb-1">
             <label className="text-sm font-medium">Output Naming Pattern</label>
-            <button
-              onClick={() => setPattern(CHAPTARR_PRESET)}
-              className="flex items-center gap-1 text-xs px-2 py-1 rounded"
-              style={{ backgroundColor: 'var(--color-primary)', color: 'white' }}
-            >
-              <RotateCcw size={12} />
-              Chaptarr Preset
-            </button>
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setPattern(PRESETS.audiobookshelf)}
+                className="flex items-center gap-1 text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: '#166534', color: '#86efac' }}
+              >
+                <RotateCcw size={12} />
+                Audiobookshelf
+              </button>
+              <button
+                onClick={() => setPattern(PRESETS.chaptarr)}
+                className="flex items-center gap-1 text-xs px-2 py-1 rounded"
+                style={{ backgroundColor: 'var(--color-primary)', color: 'white' }}
+              >
+                <RotateCcw size={12} />
+                Chaptarr
+              </button>
+            </div>
           </div>
           <p className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>
             Use tokens to define the folder structure. Segments with missing values are removed.
