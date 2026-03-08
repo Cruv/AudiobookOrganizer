@@ -81,18 +81,24 @@ def create_scan(
 
 def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
     """Run the scan using the already-created Scan record."""
-    from app.database import SessionLocal
-    from app.services.metadata import is_audio_file, read_tags
-    from app.services.parser import merge_with_tags, parse_folder_path
-    from app.services.scanner import _find_audiobook_folders, _process_folder
+    import logging
+    import traceback
 
-    import os
-    from datetime import datetime, timezone
+    logger = logging.getLogger("audiobook_organizer.scan")
+    db = None
 
-    db = SessionLocal()
     try:
-        scan = db.query(Scan).get(scan_id)
+        import os
+        from datetime import datetime, timezone
+
+        from app.database import SessionLocal
+        from app.services.scanner import _find_audiobook_folders, _process_folder
+
+        db = SessionLocal()
+
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
         if not scan:
+            logger.error("Scan %d not found in database", scan_id)
             return
 
         if not os.path.isdir(source_dir):
@@ -100,27 +106,38 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
             scan.error_message = f"Directory not found: {source_dir}"
             scan.completed_at = datetime.now(timezone.utc)
             db.commit()
+            logger.error("Scan %d: directory not found: %s", scan_id, source_dir)
             return
+
+        logger.info("Scan %d: searching for audiobook folders in %s", scan_id, source_dir)
 
         audiobook_folders = _find_audiobook_folders(source_dir)
         scan.total_folders = len(audiobook_folders)
         db.commit()
+
+        logger.info("Scan %d: found %d audiobook folders", scan_id, len(audiobook_folders))
 
         for folder_path in audiobook_folders:
             try:
                 _process_folder(folder_path, scan, db)
                 scan.processed_folders += 1
                 db.commit()
+                logger.info(
+                    "Scan %d: processed %d/%d - %s",
+                    scan_id, scan.processed_folders, scan.total_folders,
+                    os.path.basename(folder_path),
+                )
             except Exception as e:
                 from app.models.scan import ScannedFolder
 
+                logger.warning("Scan %d: skipped %s: %s", scan_id, folder_path, e)
                 folder_name = os.path.basename(folder_path)
                 sf = ScannedFolder(
                     scan_id=scan.id,
                     folder_path=folder_path,
                     folder_name=folder_name,
                     status="skipped",
-                    error_message=str(e),
+                    error_message=str(e)[:500],
                 )
                 db.add(sf)
                 scan.processed_folders += 1
@@ -129,16 +146,27 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
         scan.status = "completed"
         scan.completed_at = datetime.now(timezone.utc)
         db.commit()
+        logger.info("Scan %d: completed. %d folders processed.", scan_id, scan.processed_folders)
 
     except Exception as e:
-        scan = db.query(Scan).get(scan_id)
-        if scan:
-            scan.status = "failed"
-            scan.error_message = str(e)
-            scan.completed_at = datetime.now(timezone.utc)
-            db.commit()
+        error_msg = f"{type(e).__name__}: {e}"
+        logger.error("Scan %d FAILED: %s\n%s", scan_id, error_msg, traceback.format_exc())
+
+        if db:
+            try:
+                from datetime import datetime, timezone
+
+                scan = db.query(Scan).filter(Scan.id == scan_id).first()
+                if scan:
+                    scan.status = "failed"
+                    scan.error_message = error_msg[:500]
+                    scan.completed_at = datetime.now(timezone.utc)
+                    db.commit()
+            except Exception:
+                logger.error("Could not update scan %d status in DB", scan_id)
     finally:
-        db.close()
+        if db:
+            db.close()
 
 
 @router.get("", response_model=list[ScanResponse])
