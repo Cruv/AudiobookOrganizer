@@ -18,10 +18,35 @@ from app.models import Base
 from app.routers import books, organize, scans, settings as settings_router
 
 
+def _run_migrations(engine_instance):
+    """Run lightweight schema migrations for existing databases.
+
+    SQLAlchemy create_all only creates NEW tables, not new columns on
+    existing tables.  This adds any missing columns via ALTER TABLE.
+    """
+    import sqlalchemy as sa
+
+    migrations = [
+        # (table, column, col_type_sql)
+        ("books", "edition", "TEXT"),
+    ]
+
+    with engine_instance.connect() as conn:
+        for table, column, col_type in migrations:
+            # Check if column already exists
+            result = conn.execute(sa.text(f"PRAGMA table_info({table})"))
+            existing_cols = {row[1] for row in result}
+            if column not in existing_cols:
+                conn.execute(sa.text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+                logging.getLogger(__name__).info("Migration: added %s.%s", table, column)
+        conn.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables on startup
     Base.metadata.create_all(bind=engine)
+    _run_migrations(engine)
     yield
 
 
