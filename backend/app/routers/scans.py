@@ -1,4 +1,6 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+import os
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -7,6 +9,44 @@ from app.schemas.scan import ScanCreate, ScanDetailResponse, ScanResponse
 from app.services.scanner import scan_directory
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
+
+browse_router = APIRouter(prefix="/api", tags=["browse"])
+
+
+@browse_router.get("/browse")
+def browse_directory(path: str = Query(default="/")):
+    """List subdirectories at a given path for the directory browser."""
+    if not os.path.isdir(path):
+        raise HTTPException(status_code=400, detail=f"Not a valid directory: {path}")
+
+    try:
+        entries = sorted(os.listdir(path))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+
+    directories = []
+    for name in entries:
+        if name.startswith("."):
+            continue
+        full = os.path.join(path, name)
+        if os.path.isdir(full):
+            try:
+                has_children = any(
+                    os.path.isdir(os.path.join(full, c))
+                    for c in os.listdir(full)
+                    if not c.startswith(".")
+                )
+            except PermissionError:
+                has_children = False
+            directories.append({"name": name, "path": full, "has_children": has_children})
+
+    parent = os.path.dirname(path.rstrip("/")) or "/"
+
+    return {
+        "current_path": path,
+        "parent_path": parent if parent != path else None,
+        "directories": directories,
+    }
 
 
 def _run_scan(source_dir: str) -> None:

@@ -1,6 +1,7 @@
 import type {
   Book,
   BookDetail,
+  BrowseResult,
   LookupResult,
   OrganizePreviewItem,
   PatternPreview,
@@ -24,6 +25,10 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
   }
   return resp.json();
 }
+
+// Browse
+export const browse = (path: string) =>
+  request<BrowseResult>(`/browse?path=${encodeURIComponent(path)}`);
 
 // Scans
 export const createScan = (source_dir: string) =>

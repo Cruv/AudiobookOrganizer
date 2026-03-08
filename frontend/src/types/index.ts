@@ -111,3 +111,15 @@ export interface PatternPreview {
   pattern: string;
   preview: string;
 }
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+  has_children: boolean;
+}
+
+export interface BrowseResult {
+  current_path: string;
+  parent_path: string | null;
+  directories: DirectoryEntry[];
+}

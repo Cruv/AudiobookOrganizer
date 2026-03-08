@@ -36,6 +36,7 @@ app.add_middleware(
 
 # API routes
 app.include_router(scans.router)
+app.include_router(scans.browse_router)
 app.include_router(books.router)
 app.include_router(organize.router)
 app.include_router(organize.purge_router)

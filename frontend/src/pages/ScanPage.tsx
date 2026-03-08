@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderSearch, Loader2, Trash2 } from 'lucide-react';
+import { FolderOpen, FolderSearch, Loader2, Trash2 } from 'lucide-react';
 import { useScans, useScan, useCreateScan, useDeleteScan } from '@/hooks/useScans';
+import DirectoryBrowser from '@/components/DirectoryBrowser';
 
 export default function ScanPage() {
   const [sourceDir, setSourceDir] = useState('');
   const [activeScanId, setActiveScanId] = useState<number | null>(null);
+  const [showBrowser, setShowBrowser] = useState(false);
   const navigate = useNavigate();
 
   const { data: scans } = useScans();
@@ -40,20 +42,32 @@ export default function ScanPage() {
           containing audio files.
         </p>
         <div className="flex gap-3">
-          <input
-            type="text"
-            value={sourceDir}
-            onChange={(e) => setSourceDir(e.target.value)}
-            placeholder="/path/to/audiobooks"
-            disabled={isScanning}
-            className="flex-1 rounded border px-3 py-2 text-sm outline-none focus:ring-2 disabled:opacity-50"
-            style={{
-              backgroundColor: 'var(--color-bg)',
-              borderColor: 'var(--color-border)',
-              color: 'var(--color-text)',
-            }}
-            onKeyDown={(e) => e.key === 'Enter' && handleStartScan()}
-          />
+          <div className="flex-1 flex gap-2">
+            <input
+              type="text"
+              value={sourceDir}
+              onChange={(e) => setSourceDir(e.target.value)}
+              placeholder="/path/to/audiobooks"
+              disabled={isScanning}
+              className="flex-1 rounded border px-3 py-2 text-sm outline-none focus:ring-2 disabled:opacity-50"
+              style={{
+                backgroundColor: 'var(--color-bg)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text)',
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && handleStartScan()}
+            />
+            <button
+              onClick={() => setShowBrowser(true)}
+              disabled={isScanning}
+              className="flex items-center gap-1.5 px-3 py-2 rounded text-sm border disabled:opacity-50"
+              style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+              title="Browse directories"
+            >
+              <FolderOpen size={16} />
+              Browse
+            </button>
+          </div>
           <button
             onClick={handleStartScan}
             disabled={isScanning || !sourceDir.trim()}
@@ -68,6 +82,17 @@ export default function ScanPage() {
             {isScanning ? 'Scanning...' : 'Start Scan'}
           </button>
         </div>
+
+        {showBrowser && (
+          <DirectoryBrowser
+            initialPath={sourceDir.trim() || '/'}
+            onSelect={(path) => {
+              setSourceDir(path);
+              setShowBrowser(false);
+            }}
+            onClose={() => setShowBrowser(false)}
+          />
+        )}
       </div>
 
       {/* Active scan progress */}
