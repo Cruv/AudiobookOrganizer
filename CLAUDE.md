@@ -42,50 +42,62 @@ frontend/src/
 - **SQLAlchemy legacy API**: Uses `db.query(Model)` style, NOT `session.execute(select())`. Do NOT use `.unique()` on Query objects.
 - **No `.get()` on queries**: Use `db.query(Model).filter(Model.id == id).first()` instead of deprecated `Query.get()`.
 - **Background tasks**: The scan runs via FastAPI `BackgroundTasks`. All imports must be inside try/except with logging. DB session (`db = None`) must be declared before try block so error handler can access it.
-- **Output patterns**: Configurable tokens like `{Author}/{Series}/Book {SeriesPosition} - {Year} - {Title} {NarratorBraced}`. Empty tokens collapse consecutive dashes.
+- **Output patterns**: Configurable tokens like `{Author}/{Series}/Book {SeriesPosition} - {Year} - {Title} {NarratorBraced} {EditionBracketed}`. Empty tokens collapse consecutive dashes and empty brackets/parens/braces.
 
 ## Matching Pipeline (how audiobooks are identified)
 1. **Folder parsing** (`parser.py`): Multiple regex strategies extract title/author/series from folder names and parent directories
 2. **Tag reading** (`metadata.py`): Reads mutagen tags from up to 10 audio files per folder, builds consensus
-3. **Merge** (`parser.py:merge_with_tags`): Tags win for author/title when non-generic; boosts confidence on agreement
-4. **Auto-lookup** (`scanner.py`): Books with confidence < 0.70 get automatic online lookup via iTunes + Google Books + OpenLibrary
-5. **Auto-apply** (`scanner.py`): Best lookup result applied if auto_match_score >= 0.85
+3. **Edition detection** (`parser.py:detect_edition`): Detects Graphic Audio editions from folder path, folder name markers `(GA)`, tag_author being "GraphicAudio", or `[Dramatized Adaptation]` in tags
+4. **Merge** (`parser.py:merge_with_tags`): Tags win for author/title when non-generic; GraphicAudio rejected as author; boosts confidence on agreement
+5. **Auto-lookup** (`scanner.py`): Books with confidence < 0.70 get automatic online lookup via iTunes + Google Books + OpenLibrary
+6. **Auto-apply** (`scanner.py`): Best lookup result applied if auto_match_score >= 0.85
 
 ## Current Status (Last Updated: 2026-03-08)
 
 ### What's Working
 - Full scan pipeline: directory walk -> folder parse -> tag read -> DB records
 - Review page with confidence badges, source/output path preview, edit modal
+- **Edition detection**: Graphic Audio auto-detected from folder path, folder name `(GA)`, tag_author "GraphicAudio", and `[Dramatized Adaptation]` tags. Edition shown as purple badge on ReviewPage, editable in BookEditModal
+- **Edition output tokens**: `{Edition}` and `{EditionBracketed}` (wraps in `[]`) for output path patterns. Empty edition collapses cleanly
+- **GA author fix**: "GraphicAudio", "Graphic Audio LLC." etc. rejected as author in `merge_with_tags`, falls back to folder path author
+- **GA title cleaning**: `(GA)`, `(GraphicAudio)`, `[Dramatized Adaptation]` stripped from parsed titles
 - Manual search modal (SearchModal) for custom metadata queries
 - Toast notifications on actions
 - Directory browser on Scan page
-- Export diagnostics button (GET /api/books/export) for matching analysis
+- Export diagnostics button (GET /api/books/export) with edition field
 - iTunes/Apple Books API + Google Books + OpenLibrary lookups with caching + dedup
 - Multi-file tag consensus (reads up to 10 files, most common values)
 - Scan logging visible in Docker logs
 - Organize (copy) and Purge (delete source) workflows
 
 ### Next Steps (Priority Order)
-1. **Analyze export data**: User needs to export scan results and share the JSON so matching quality can be evaluated across their 254-book library
-2. **Tune parser for real-world patterns**: Based on export analysis, improve regex strategies for patterns seen in actual folder names (Graphic Audio tags, multi-part books like "Part 01", series with bracket notation like "[01]", Horus Heresy primarch novels with "P01." prefix)
-3. **Handle multi-part audiobooks**: Many books are split into "Part 1 of 2", "(1 of 3)" etc. These should be grouped as a single book or at least recognized as parts
-4. **Improve nested folder detection**: Some structures have franchise/series/subseries/book (e.g. Warhammer 40k -> Gaunt's Ghosts -> [01] First and Only). The parser takes parent[-3] as "author" which may be a franchise name
+1. **Re-scan and verify edition detection**: Run a new scan to verify GA books get `edition = "Graphic Audio"`, correct authors, and clean titles
+2. **Handle multi-part audiobooks**: 34 GA entries are split into Part 01, Part 02 etc. These should be grouped as a single book. All multi-part entries are GA books
+3. **Improve nested folder detection**: Some structures have franchise/series/subseries/book (e.g. Warhammer 40k -> Gaunt's Ghosts -> [01] First and Only). Parser takes parent[-3] as "author" which may be a franchise name
+4. **Tune parser for real-world patterns**: Series bracket notation `[01]`, Horus Heresy primarch novels with "P01." prefix, Deathlands numbering
 5. **Auto-lookup integration**: Verify auto-lookup triggers correctly during scan and test with real data
-6. **UI polish**: Pagination for large book lists, sort controls, filter by confidence range, bulk operations
+6. **UI polish**: Pagination for large book lists, sort controls, filter by confidence/edition, bulk operations
 
 ### Known Issues
 - "Warhammer 40k" and similar franchise names parsed as authors (suspect author detection catches trailing numbers but franchise detection could be smarter)
-- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped
-- Graphic Audio tags in folder names (`[GA]`, `[GraphicAudio]`, `[GraphicAudio-256]`) are cleaned but could be used as edition metadata
+- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all Graphic Audio)
+- 9 "scattered" GA copies of Mistborn/Stormlight live outside `/Graphic Audio Collection/` folder, creating duplicates
 - Scan progress bar updates via polling (1.5s interval) - works but could use WebSocket for real-time updates
+- Existing DB data needs re-scan to populate new `edition` column (SQLAlchemy `create_all` will add nullable column automatically)
 
-### Recent Bug Fixes
-- Fixed scan background task silently crashing (imports outside try/except, db not available in error handler)
-- Fixed `query.unique()` AttributeError (legacy Query API doesn't have `.unique()`)
-- Fixed output path generating "Book - - Title" when tokens empty (consecutive dash collapse)
-- Fixed tab title showing "frontend" instead of "Audiobook Organizer"
-- Fixed Dockerfile build order (source copied before pip install)
-- Fixed ghcr.io image name mismatch (no hyphen)
+### Export Data Analysis (254 books, scan 1)
+- **146 GA books** (57.5%) — detected by folder path containing "Graphic Audio" (100% coverage)
+- **96 had "GraphicAudio" as author** — now rejected, will fall back to folder-path author on re-scan
+- **12 had `(GA)`/`(GraphicAudio)` in title** — now cleaned by junk patterns
+- **6 Mistborn titles** exist in both GA and standard versions — now distinguishable by `{EditionBracketed}` in output path
+
+### Recent Changes
+- Added edition field (Book model, schemas, frontend types, export)
+- Added `detect_edition()` function in parser.py
+- Added `_is_graphic_audio_author()` to reject GA as author
+- Added `(GA)`, `(GraphicAudio)`, `[Dramatized Adaptation]` to JUNK_PATTERNS
+- Added `{Edition}` and `{EditionBracketed}` tokens to organizer + settings preview
+- Updated default patterns and presets to include `{EditionBracketed}`
 
 ## How to Continue Development
 When starting a new session, follow this process:
