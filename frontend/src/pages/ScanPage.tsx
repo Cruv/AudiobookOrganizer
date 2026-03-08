@@ -150,7 +150,7 @@ export default function ScanPage() {
                   <p className="text-sm font-medium">{scan.source_dir}</p>
                   <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                     {scan.total_folders} folders &middot; {scan.status} &middot;{' '}
-                    {new Date(scan.created_at).toLocaleString()}
+                    {new Date(scan.created_at + 'Z').toLocaleString()}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
