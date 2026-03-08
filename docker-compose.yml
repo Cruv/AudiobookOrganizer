@@ -12,5 +12,5 @@ services:
     volumes:
       - /home/cruv/DockerStorage/audiobookorganizer:/app/data
       - /path/to/downloads:/downloads    # raw audiobook downloads to organize
-      - /path/to/library:/library        # organized library (Audiobookshelf/Chaptarr reads from here)
+      - /path/to/audiobooks:/audiobooks    # organized output (Audiobookshelf/Chaptarr reads from here)
     restart: unless-stopped

@@ -44,7 +44,7 @@ chown -R abc:abc /run/nginx 2>/dev/null || mkdir -p /run/nginx && chown -R abc:a
 
 # Set ownership of audiobook directories if they exist
 [ -d /downloads ] && chown abc:abc /downloads
-[ -d /library ] && chown abc:abc /library
+[ -d /audiobooks ] && chown abc:abc /audiobooks
 
 # Start uvicorn as abc user in background
 echo "Starting backend server..."
