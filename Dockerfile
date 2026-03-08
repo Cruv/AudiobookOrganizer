@@ -13,12 +13,10 @@ RUN apk add --no-cache nginx curl shadow
 
 WORKDIR /app
 
-# Install Python dependencies
+# Copy backend and install Python dependencies
 COPY backend/pyproject.toml ./
-RUN pip install --no-cache-dir .
-
-# Copy backend code
 COPY backend/app ./app
+RUN pip install --no-cache-dir .
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist /app/static
