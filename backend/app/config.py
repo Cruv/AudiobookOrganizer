@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "sqlite:////app/data/audiobook_organizer.db"
-    default_output_pattern: str = "{Author}/{Series}/{SeriesPosition} - {Title} ({Year})"
+    default_output_pattern: str = "{Author}/{Series}/{SeriesPosition} - {Title} ({Year}) {EditionBracketed}"
     default_output_root: str = "/audiobooks"
     google_books_api_key: str | None = None
     cors_origins: list[str] = ["http://localhost:5173"]

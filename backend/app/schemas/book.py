@@ -31,6 +31,7 @@ class BookResponse(BaseModel):
     series_position: str | None
     year: str | None
     narrator: str | None
+    edition: str | None
     source: str
     confidence: float
     is_confirmed: bool
@@ -57,6 +58,7 @@ class BookUpdate(BaseModel):
     series_position: str | None = None
     year: str | None = None
     narrator: str | None = None
+    edition: str | None = None
 
 
 class BookConfirmBatch(BaseModel):

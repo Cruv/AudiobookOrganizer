@@ -11,6 +11,7 @@ interface Props {
     series_position?: string | null;
     year?: string | null;
     narrator?: string | null;
+    edition?: string | null;
   }) => void;
   onClose: () => void;
 }
@@ -22,6 +23,7 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
   const [seriesPosition, setSeriesPosition] = useState(book.series_position || '');
   const [year, setYear] = useState(book.year || '');
   const [narrator, setNarrator] = useState(book.narrator || '');
+  const [edition, setEdition] = useState(book.edition || '');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,6 +34,7 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
       series_position: seriesPosition || null,
       year: year || null,
       narrator: narrator || null,
+      edition: edition || null,
     });
   };
 
@@ -60,6 +63,7 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
             { label: 'Series Position', value: seriesPosition, set: setSeriesPosition },
             { label: 'Year', value: year, set: setYear },
             { label: 'Narrator', value: narrator, set: setNarrator },
+            { label: 'Edition', value: edition, set: setEdition },
           ].map(({ label, value, set }) => (
             <div key={label}>
               <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>

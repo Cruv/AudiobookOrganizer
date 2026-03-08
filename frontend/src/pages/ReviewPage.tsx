@@ -118,6 +118,14 @@ export default function ReviewPage() {
                   </span>
                   <ConfidenceBadge confidence={book.confidence} />
                   <SourceBadge source={book.source} />
+                  {book.edition && (
+                    <span
+                      className="px-1.5 py-0.5 rounded text-xs font-medium"
+                      style={{ backgroundColor: '#7c3aed22', color: '#7c3aed' }}
+                    >
+                      {book.edition}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   <span>{book.author || 'Unknown Author'}</span>

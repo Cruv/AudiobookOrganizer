@@ -16,6 +16,7 @@ class ParsedMetadata:
     series_position: str | None = None
     year: str | None = None
     narrator: str | None = None
+    edition: str | None = None
     confidence: float = 0.0
     source: str = "parsed"
 
@@ -33,9 +34,33 @@ JUNK_PATTERNS = [
     r"\b(?:retail|proper|repack)\b",
     r"\b(?:complete\s+(?:series|collection))\b",
     r"\b(?:graphic\s+audio)\b",
+    r"\(GA\)",
+    r"\(GraphicAudio\)",
+    r"\(Graphic\s+Audio\)",
+    r"\[Dramatized\s+Adaptation\]",
+    r"\(Dramatized\s+Adaptation\)",
     r"\[.*?\]",
     r"\((?:mp3|m4b|flac|audiobook|unabridged|abridged|\d+\s*kbps).*?\)",
 ]
+
+# Patterns that identify Graphic Audio as a publisher/producer (not a real author)
+GRAPHIC_AUDIO_AUTHOR_PATTERNS = re.compile(
+    r"^(?:GraphicAudio|Graphic\s*Audio(?:\s*LLC\.?)?|GraphicAdio)$",
+    re.IGNORECASE,
+)
+
+# Edition detection patterns for folder paths and names
+GRAPHIC_AUDIO_PATH_PATTERN = re.compile(
+    r"Graphic\s*Audio", re.IGNORECASE
+)
+GRAPHIC_AUDIO_NAME_PATTERN = re.compile(
+    r"\(GA\)|\[GA\]|\(GraphicAudio\)|\[GraphicAudio(?:-\d+)?\]|\(Graphic\s+Audio\)",
+    re.IGNORECASE,
+)
+DRAMATIZED_PATTERN = re.compile(
+    r"\[Dramatized\s+Adaptation\]|\(Dramatized\s+Adaptation\)",
+    re.IGNORECASE,
+)
 
 # Leading track/book numbers: "01 ", "01. ", "01 - "
 LEADING_NUMBER_PATTERN = re.compile(r"^\d{1,3}(?:\s*[-–—.)\]]\s*|\s+)(?=[A-Z])")
@@ -147,10 +172,51 @@ def _is_suspect_author(author: str | None) -> bool:
     """Check if an author name looks invalid (franchise, publisher, etc.)."""
     if not author:
         return True
+    if _is_graphic_audio_author(author):
+        return True
     for pattern in SUSPECT_AUTHOR_PATTERNS:
         if pattern.search(author):
             return True
     return False
+
+
+def _is_graphic_audio_author(author: str | None) -> bool:
+    """Check if an author value is actually GraphicAudio (publisher, not a person)."""
+    if not author:
+        return False
+    return bool(GRAPHIC_AUDIO_AUTHOR_PATTERNS.match(author.strip()))
+
+
+def detect_edition(
+    folder_path: str,
+    folder_name: str | None = None,
+    tags: dict[str, str | None] | None = None,
+) -> str | None:
+    """Detect audiobook edition from folder path, name, and tags.
+
+    Returns edition string (e.g. "Graphic Audio") or None.
+    """
+    # Check folder path for "Graphic Audio"
+    if GRAPHIC_AUDIO_PATH_PATTERN.search(folder_path):
+        return "Graphic Audio"
+
+    # Check folder name for GA markers
+    if folder_name and GRAPHIC_AUDIO_NAME_PATTERN.search(folder_name):
+        return "Graphic Audio"
+
+    # Check tag_author for GraphicAudio variants
+    if tags:
+        tag_author = tags.get("author")
+        if tag_author and _is_graphic_audio_author(tag_author):
+            return "Graphic Audio"
+
+        # Check tag_title/tag_album for [Dramatized Adaptation]
+        for field in ("title", "album"):
+            val = tags.get(field)
+            if val and DRAMATIZED_PATTERN.search(val):
+                return "Graphic Audio"
+
+    return None
 
 
 def _strategy_author_series_title(text: str) -> ParsedMetadata | None:
@@ -402,8 +468,16 @@ def merge_with_tags(
     if _is_generic_value(tag_narrator):
         tag_narrator = None
 
-    # Use tag author if it looks like a real name
-    if tag_author:
+    # Clean edition markers from tag values before using them
+    if tag_title:
+        tag_title = DRAMATIZED_PATTERN.sub("", tag_title).strip()
+        tag_title = re.sub(r"\s+", " ", tag_title).strip() or None
+    if tag_album:
+        tag_album = DRAMATIZED_PATTERN.sub("", tag_album).strip()
+        tag_album = re.sub(r"\s+", " ", tag_album).strip() or None
+
+    # Use tag author if it looks like a real name (NOT GraphicAudio)
+    if tag_author and not _is_graphic_audio_author(tag_author):
         if parsed.author and fuzzy_match(parsed.author, tag_author):
             parsed.confidence = min(parsed.confidence + 0.10, 1.0)
         elif not parsed.author or _is_suspect_author(parsed.author):

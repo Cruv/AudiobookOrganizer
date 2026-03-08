@@ -55,12 +55,14 @@ def preview_pattern(pattern: str = Query(...)):
     """Preview a naming pattern with sample data."""
     sample_tokens = {
         "{NarratorBraced}": "{Michael Kramer}",
+        "{EditionBracketed}": "[Graphic Audio]",
         "{Author}": "Brandon Sanderson",
         "{Series}": "Mistborn",
         "{SeriesPosition}": "1",
         "{Title}": "The Final Empire",
         "{Year}": "2006",
         "{Narrator}": "Michael Kramer",
+        "{Edition}": "Graphic Audio",
     }
 
     preview = pattern
@@ -71,6 +73,7 @@ def preview_pattern(pattern: str = Query(...)):
     import re
     preview = re.sub(r"\(\s*\)", "", preview)
     preview = re.sub(r"\{\s*\}", "", preview)
+    preview = re.sub(r"\[\s*\]", "", preview)
     preview = re.sub(r"^\s*[-–—]\s*|\s*[-–—]\s*$", "", preview)
     preview = re.sub(r"\s+", " ", preview).strip()
 

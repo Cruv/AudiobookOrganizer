@@ -3,8 +3,8 @@ import { Save, RotateCcw } from 'lucide-react';
 import { useSettings, useUpdateSettings, usePreviewPattern } from '@/hooks/useSettings';
 
 const PRESETS = {
-  chaptarr: '{Author}/{Series}/{SeriesPosition} - {Title} ({Year})',
-  audiobookshelf: '{Author}/{Series}/Book {SeriesPosition} - {Year} - {Title} {NarratorBraced}',
+  chaptarr: '{Author}/{Series}/{SeriesPosition} - {Title} ({Year}) {EditionBracketed}',
+  audiobookshelf: '{Author}/{Series}/Book {SeriesPosition} - {Year} - {Title} {NarratorBraced} {EditionBracketed}',
 };
 
 const TOKENS = [
@@ -15,6 +15,8 @@ const TOKENS = [
   '{Year}',
   '{Narrator}',
   '{NarratorBraced}',
+  '{Edition}',
+  '{EditionBracketed}',
 ];
 
 export default function SettingsPage() {

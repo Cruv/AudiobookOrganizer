@@ -25,7 +25,7 @@ def _get_settings(db: Session) -> tuple[str, str]:
     """Get output pattern and root from settings."""
     pattern_setting = db.query(UserSetting).filter(UserSetting.key == "output_pattern").first()
     root_setting = db.query(UserSetting).filter(UserSetting.key == "output_root").first()
-    pattern = pattern_setting.value if pattern_setting else "{Author}/{Series}/{SeriesPosition} - {Title} ({Year})"
+    pattern = pattern_setting.value if pattern_setting else "{Author}/{Series}/{SeriesPosition} - {Title} ({Year}) {EditionBracketed}"
     root = root_setting.value if root_setting else "/audiobooks"
     return pattern, root
 
@@ -127,6 +127,7 @@ def export_books(
             "series_position": book.series_position,
             "year": book.year,
             "narrator": book.narrator,
+            "edition": book.edition,
             "confidence": book.confidence,
             "source": book.source,
             "is_confirmed": book.is_confirmed,

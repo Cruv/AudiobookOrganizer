@@ -32,6 +32,7 @@ export interface Book {
   series_position: string | null;
   year: string | null;
   narrator: string | null;
+  edition: string | null;
   source: 'parsed' | 'tag' | 'google_books' | 'openlibrary' | 'manual';
   confidence: number;
   is_confirmed: boolean;

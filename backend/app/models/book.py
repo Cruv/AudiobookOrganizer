@@ -19,6 +19,7 @@ class Book(Base):
     series_position: Mapped[str | None] = mapped_column(String(20), nullable=True)
     year: Mapped[str | None] = mapped_column(String(10), nullable=True)
     narrator: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edition: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, default="parsed"
     )

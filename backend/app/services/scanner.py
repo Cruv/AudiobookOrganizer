@@ -15,7 +15,7 @@ from app.models.book import Book, BookFile
 from app.models.scan import Scan, ScannedFolder
 from app.models.settings import UserSetting
 from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_folder_tags, read_tags
-from app.services.parser import ParsedMetadata, auto_match_score, merge_with_tags, parse_folder_path
+from app.services.parser import ParsedMetadata, auto_match_score, detect_edition, merge_with_tags, parse_folder_path
 
 MAX_DEPTH = 6
 AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 0.70
@@ -215,8 +215,15 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     # Read consensus tags from multiple files
     consensus_tags = read_folder_tags(folder_path)
 
+    # Detect edition (Graphic Audio, etc.) before merging tags
+    edition = detect_edition(folder_path, folder_name, consensus_tags)
+
     # Merge parsed + consensus tag data
     parsed = merge_with_tags(parsed, consensus_tags)
+
+    # Apply detected edition
+    if edition:
+        parsed.edition = edition
 
     # Create Book record
     book = Book(
@@ -227,6 +234,7 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
         series_position=parsed.series_position,
         year=parsed.year,
         narrator=parsed.narrator,
+        edition=parsed.edition,
         source=parsed.source,
         confidence=parsed.confidence,
     )
