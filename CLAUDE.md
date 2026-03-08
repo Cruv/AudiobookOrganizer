@@ -92,6 +92,9 @@ frontend/src/
 - **6 Mistborn titles** exist in both GA and standard versions — now distinguishable by `{EditionBracketed}` in output path
 
 ### Recent Changes
+- **Fixed "(Part X of Y)" title mangling**: Multi-part indicators like "(Part 2 of 2)" are now stripped before series position extraction, preventing orphaned "( of 2)" in titles
+- **Bracket position extraction**: `[04]`, `[01]` bracket notation now extracted as series position before junk cleaning removes all brackets. Bracket positions are preferred over text-extracted positions
+- **GA narrator normalization**: Cast lists with 4+ names (or containing "Full Cast") normalized to just "Full Cast" to prevent extremely long output paths
 - Added edition field (Book model, schemas, frontend types, export)
 - Added `detect_edition()` function in parser.py
 - Added `_is_graphic_audio_author()` to reject GA as author
