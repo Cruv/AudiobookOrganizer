@@ -71,7 +71,7 @@ def list_books(
     else:
         query = query.order_by(Book.created_at.desc())
 
-    books = query.unique().all()
+    books = query.all()
 
     results = []
     for book in books:
@@ -97,7 +97,7 @@ def export_books(
         query = query.filter(ScannedFolder.scan_id == scan_id)
     query = query.order_by(Book.confidence.asc())
 
-    books = query.unique().all()
+    books = query.all()
     pattern, root = _get_settings(db)
 
     export = []
