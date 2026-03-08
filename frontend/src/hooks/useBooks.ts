@@ -53,6 +53,13 @@ export function useLookupBook() {
   });
 }
 
+export function useSearchBook() {
+  return useMutation({
+    mutationFn: ({ id, query }: { id: number; query: string }) =>
+      api.searchBook(id, query),
+  });
+}
+
 export function useApplyLookup() {
   const qc = useQueryClient();
   return useMutation({

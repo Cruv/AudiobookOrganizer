@@ -39,6 +39,7 @@ class BookResponse(BaseModel):
     purge_status: str
     folder_path: str | None = None
     folder_name: str | None = None
+    projected_path: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -83,3 +84,7 @@ class LookupResponse(BaseModel):
 class ApplyLookup(BaseModel):
     provider: str
     result_index: int
+
+
+class BookSearch(BaseModel):
+    query: str

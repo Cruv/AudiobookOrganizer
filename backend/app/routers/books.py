@@ -4,17 +4,38 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.book import Book
 from app.models.scan import ScannedFolder
+from app.models.settings import UserSetting
 from app.schemas.book import (
     ApplyLookup,
     BookConfirmBatch,
     BookDetailResponse,
     BookResponse,
+    BookSearch,
     BookUpdate,
     LookupResponse,
 )
 from app.services.lookup import lookup_book
+from app.services.organizer import build_output_path
 
 router = APIRouter(prefix="/api/books", tags=["books"])
+
+
+def _get_settings(db: Session) -> tuple[str, str]:
+    """Get output pattern and root from settings."""
+    pattern_setting = db.query(UserSetting).filter(UserSetting.key == "output_pattern").first()
+    root_setting = db.query(UserSetting).filter(UserSetting.key == "output_root").first()
+    pattern = pattern_setting.value if pattern_setting else "{Author}/{Series}/{SeriesPosition} - {Title} ({Year})"
+    root = root_setting.value if root_setting else "/audiobooks"
+    return pattern, root
+
+
+def _attach_book_info(book: Book, resp: BookResponse, db: Session) -> None:
+    """Attach folder info and projected path to a book response."""
+    if book.scanned_folder:
+        resp.folder_path = book.scanned_folder.folder_path
+        resp.folder_name = book.scanned_folder.folder_name
+    pattern, root = _get_settings(db)
+    resp.projected_path = build_output_path(book, pattern, root)
 
 
 @router.get("", response_model=list[BookResponse])
@@ -51,13 +72,10 @@ def list_books(
 
     books = query.all()
 
-    # Attach folder info
     results = []
     for book in books:
         resp = BookResponse.model_validate(book)
-        if book.scanned_folder:
-            resp.folder_path = book.scanned_folder.folder_path
-            resp.folder_name = book.scanned_folder.folder_name
+        _attach_book_info(book, resp, db)
         results.append(resp)
 
     return results
@@ -76,9 +94,7 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Book not found")
 
     resp = BookDetailResponse.model_validate(book)
-    if book.scanned_folder:
-        resp.folder_path = book.scanned_folder.folder_path
-        resp.folder_name = book.scanned_folder.folder_name
+    _attach_book_info(book, resp, db)
     return resp
 
 
@@ -98,9 +114,7 @@ def update_book(book_id: int, body: BookUpdate, db: Session = Depends(get_db)):
     db.refresh(book)
 
     resp = BookResponse.model_validate(book)
-    if book.scanned_folder:
-        resp.folder_path = book.scanned_folder.folder_path
-        resp.folder_name = book.scanned_folder.folder_name
+    _attach_book_info(book, resp, db)
     return resp
 
 
@@ -116,9 +130,7 @@ def confirm_book(book_id: int, db: Session = Depends(get_db)):
     db.refresh(book)
 
     resp = BookResponse.model_validate(book)
-    if book.scanned_folder:
-        resp.folder_path = book.scanned_folder.folder_path
-        resp.folder_name = book.scanned_folder.folder_name
+    _attach_book_info(book, resp, db)
     return resp
 
 
@@ -160,15 +172,30 @@ async def lookup_book_endpoint(book_id: int, db: Session = Depends(get_db)):
             status_code=400, detail="Book has no title to search for"
         )
 
-    # Get API key from settings
-    from app.models.settings import UserSetting
-
     api_key_setting = (
         db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     )
     api_key = api_key_setting.value if api_key_setting else None
 
     results = await lookup_book(title, book.author, api_key, db)
+    return LookupResponse(results=results)
+
+
+@router.post("/{book_id}/search", response_model=LookupResponse)
+async def search_book_endpoint(
+    book_id: int, body: BookSearch, db: Session = Depends(get_db)
+):
+    """Search online with a custom query for a book."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    api_key_setting = (
+        db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
+    )
+    api_key = api_key_setting.value if api_key_setting else None
+
+    results = await lookup_book(body.query, None, api_key, db)
     return LookupResponse(results=results)
 
 
@@ -224,7 +251,5 @@ def apply_lookup(
     db.refresh(book)
 
     resp = BookResponse.model_validate(book)
-    if book.scanned_folder:
-        resp.folder_path = book.scanned_folder.folder_path
-        resp.folder_name = book.scanned_folder.folder_name
+    _attach_book_info(book, resp, db)
     return resp

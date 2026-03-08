@@ -96,6 +96,12 @@ export const confirmBatch = (data: {
 export const lookupBook = (id: number) =>
   request<{ results: LookupResult[] }>(`/books/${id}/lookup`, { method: 'POST' });
 
+export const searchBook = (id: number, query: string) =>
+  request<{ results: LookupResult[] }>(`/books/${id}/search`, {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  });
+
 export const applyLookup = (
   id: number,
   data: { provider: string; result_index: number },

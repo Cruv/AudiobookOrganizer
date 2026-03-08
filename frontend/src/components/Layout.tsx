@@ -25,7 +25,7 @@ export default function Layout() {
         <div className="p-4 border-b flex items-center gap-2"
           style={{ borderColor: 'var(--color-border)' }}>
           <BookOpen size={24} style={{ color: 'var(--color-primary)' }} />
-          <h1 className="text-lg font-bold">AudioOrganizer</h1>
+          <h1 className="text-lg font-bold">Audiobook Organizer</h1>
         </div>
         <div className="flex-1 py-2">
           {navItems.map(({ to, icon: Icon, label }) => (

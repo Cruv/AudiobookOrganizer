@@ -6,14 +6,13 @@ import {
   useConfirmBook,
   useConfirmBatch,
   useUpdateBook,
-  useLookupBook,
-  useApplyLookup,
 } from '@/hooks/useBooks';
 import ConfidenceBadge from '@/components/ConfidenceBadge';
 import SourceBadge from '@/components/SourceBadge';
 import BookEditModal from '@/components/BookEditModal';
-import LookupResults from '@/components/LookupResults';
-import type { Book, LookupResult } from '@/types';
+import SearchModal from '@/components/SearchModal';
+import { useToast } from '@/components/Toast';
+import type { Book } from '@/types';
 
 export default function ReviewPage() {
   const [searchParams] = useSearchParams();
@@ -23,40 +22,19 @@ export default function ReviewPage() {
   const confirmBook = useConfirmBook();
   const confirmBatch = useConfirmBatch();
   const updateBook = useUpdateBook();
-  const lookupBook = useLookupBook();
-  const applyLookup = useApplyLookup();
+  const toast = useToast();
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
-  const [lookupBookId, setLookupBookId] = useState<number | null>(null);
-  const [lookupResults, setLookupResults] = useState<LookupResult[] | null>(null);
-
-  const handleLookup = (book: Book) => {
-    setLookupBookId(book.id);
-    lookupBook.mutate(book.id, {
-      onSuccess: (data) => {
-        setLookupResults(data.results);
-      },
-      onError: () => {
-        setLookupResults([]);
-      },
-    });
-  };
-
-  const handleApplyLookup = (provider: string, index: number) => {
-    if (lookupBookId == null) return;
-    applyLookup.mutate(
-      { id: lookupBookId, data: { provider, result_index: index } },
-      {
-        onSuccess: () => {
-          setLookupResults(null);
-          setLookupBookId(null);
-        },
-      },
-    );
-  };
+  const [searchingBook, setSearchingBook] = useState<Book | null>(null);
 
   const handleConfirmHighConfidence = () => {
-    confirmBatch.mutate({ min_confidence: 0.8, scan_id: scanId });
+    confirmBatch.mutate(
+      { min_confidence: 0.8, scan_id: scanId },
+      {
+        onSuccess: (data) => toast.success(`Confirmed ${data.confirmed} books`),
+        onError: () => toast.error('Failed to confirm books'),
+      },
+    );
   };
 
   if (isLoading) {
@@ -96,69 +74,83 @@ export default function ReviewPage() {
         {books?.map((book) => (
           <div
             key={book.id}
-            className="flex items-center gap-4 rounded-lg border px-4 py-3"
+            className="rounded-lg border px-4 py-3"
             style={{
               backgroundColor: 'var(--color-surface)',
               borderColor: book.is_confirmed ? 'var(--color-success)' : 'var(--color-border)',
               borderWidth: book.is_confirmed ? '2px' : '1px',
             }}
           >
-            {/* Metadata */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-medium text-sm truncate">
-                  {book.title || 'Unknown Title'}
-                </span>
-                <ConfidenceBadge confidence={book.confidence} />
-                <SourceBadge source={book.source} />
-              </div>
-              <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                <span>{book.author || 'Unknown Author'}</span>
-                {book.series && (
-                  <span>
-                    {book.series}
-                    {book.series_position && ` #${book.series_position}`}
+            <div className="flex items-center gap-4">
+              {/* Metadata */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-sm truncate">
+                    {book.title || 'Unknown Title'}
                   </span>
-                )}
-                {book.year && <span>{book.year}</span>}
+                  <ConfidenceBadge confidence={book.confidence} />
+                  <SourceBadge source={book.source} />
+                </div>
+                <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  <span>{book.author || 'Unknown Author'}</span>
+                  {book.series && (
+                    <span>
+                      {book.series}
+                      {book.series_position && ` #${book.series_position}`}
+                    </span>
+                  )}
+                  {book.year && <span>{book.year}</span>}
+                </div>
               </div>
-              <p className="text-xs mt-1 truncate" style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>
-                {book.folder_name || book.folder_path}
-              </p>
+
+              {/* Actions */}
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  onClick={() => setSearchingBook(book)}
+                  className="p-2 rounded hover:bg-[var(--color-surface-hover)]"
+                  style={{ color: 'var(--color-text-muted)' }}
+                  title="Search Online"
+                >
+                  <Search size={16} />
+                </button>
+                <button
+                  onClick={() => setEditingBook(book)}
+                  className="p-2 rounded hover:bg-[var(--color-surface-hover)]"
+                  style={{ color: 'var(--color-text-muted)' }}
+                  title="Edit"
+                >
+                  <Edit3 size={16} />
+                </button>
+                <button
+                  onClick={() =>
+                    confirmBook.mutate(book.id, {
+                      onSuccess: () => toast.success('Book confirmed'),
+                    })
+                  }
+                  disabled={book.is_confirmed}
+                  className="p-2 rounded hover:bg-[var(--color-surface-hover)] disabled:opacity-30"
+                  style={{ color: book.is_confirmed ? 'var(--color-success)' : 'var(--color-text-muted)' }}
+                  title={book.is_confirmed ? 'Confirmed' : 'Confirm'}
+                >
+                  <Check size={16} />
+                </button>
+              </div>
             </div>
 
-            {/* Actions */}
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button
-                onClick={() => handleLookup(book)}
-                disabled={lookupBook.isPending && lookupBookId === book.id}
-                className="p-2 rounded hover:bg-[var(--color-surface-hover)]"
-                style={{ color: 'var(--color-text-muted)' }}
-                title="Online Lookup"
-              >
-                {lookupBook.isPending && lookupBookId === book.id ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <Search size={16} />
-                )}
-              </button>
-              <button
-                onClick={() => setEditingBook(book)}
-                className="p-2 rounded hover:bg-[var(--color-surface-hover)]"
-                style={{ color: 'var(--color-text-muted)' }}
-                title="Edit"
-              >
-                <Edit3 size={16} />
-              </button>
-              <button
-                onClick={() => confirmBook.mutate(book.id)}
-                disabled={book.is_confirmed}
-                className="p-2 rounded hover:bg-[var(--color-surface-hover)] disabled:opacity-30"
-                style={{ color: book.is_confirmed ? 'var(--color-success)' : 'var(--color-text-muted)' }}
-                title={book.is_confirmed ? 'Confirmed' : 'Confirm'}
-              >
-                <Check size={16} />
-              </button>
+            {/* Before/After paths */}
+            <div className="mt-2 text-xs font-mono space-y-0.5">
+              <div className="flex gap-2 truncate">
+                <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>Source:</span>
+                <span className="truncate" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
+                  {book.folder_path || book.folder_name || '\u2014'}
+                </span>
+              </div>
+              <div className="flex gap-2 truncate">
+                <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>Output:</span>
+                <span className="truncate" style={{ color: 'var(--color-success)' }}>
+                  {book.projected_path || '\u2014'}
+                </span>
+              </div>
             </div>
           </div>
         ))}
@@ -182,22 +174,24 @@ export default function ReviewPage() {
           onSave={(data) => {
             updateBook.mutate(
               { id: editingBook.id, data },
-              { onSuccess: () => setEditingBook(null) },
+              {
+                onSuccess: () => {
+                  toast.success('Metadata saved');
+                  setEditingBook(null);
+                },
+                onError: () => toast.error('Failed to save metadata'),
+              },
             );
           }}
           onClose={() => setEditingBook(null)}
         />
       )}
 
-      {/* Lookup results modal */}
-      {lookupResults && (
-        <LookupResults
-          results={lookupResults}
-          onApply={handleApplyLookup}
-          onClose={() => {
-            setLookupResults(null);
-            setLookupBookId(null);
-          }}
+      {/* Search modal */}
+      {searchingBook && (
+        <SearchModal
+          book={searchingBook}
+          onClose={() => setSearchingBook(null)}
         />
       )}
     </div>

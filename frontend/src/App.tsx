@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Layout from '@/components/Layout';
+import { ToastProvider } from '@/components/Toast';
 import ScanPage from '@/pages/ScanPage';
 import ReviewPage from '@/pages/ReviewPage';
 import OrganizePage from '@/pages/OrganizePage';
@@ -19,17 +20,19 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<ScanPage />} />
-            <Route path="/review" element={<ReviewPage />} />
-            <Route path="/organize" element={<OrganizePage />} />
-            <Route path="/purge" element={<PurgePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/" element={<ScanPage />} />
+              <Route path="/review" element={<ReviewPage />} />
+              <Route path="/organize" element={<OrganizePage />} />
+              <Route path="/purge" element={<PurgePage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
     </QueryClientProvider>
   );
 }

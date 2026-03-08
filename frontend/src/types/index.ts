@@ -40,6 +40,7 @@ export interface Book {
   purge_status: 'not_purged' | 'purged';
   folder_path: string | null;
   folder_name: string | null;
+  projected_path: string | null;
   created_at: string;
   updated_at: string;
 }
