@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -79,6 +80,67 @@ def list_books(
         results.append(resp)
 
     return results
+
+
+@router.get("/export")
+def export_books(
+    scan_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Export all books as diagnostic JSON for debugging matching quality."""
+    query = (
+        db.query(Book)
+        .outerjoin(ScannedFolder)
+        .options(joinedload(Book.scanned_folder), joinedload(Book.files))
+    )
+    if scan_id is not None:
+        query = query.filter(ScannedFolder.scan_id == scan_id)
+    query = query.order_by(Book.confidence.asc())
+
+    books = query.unique().all()
+    pattern, root = _get_settings(db)
+
+    export = []
+    for book in books:
+        folder_path = book.scanned_folder.folder_path if book.scanned_folder else None
+        folder_name = book.scanned_folder.folder_name if book.scanned_folder else None
+        projected = build_output_path(book, pattern, root)
+
+        first_file = book.files[0] if book.files else None
+        tag_info = None
+        if first_file:
+            tag_info = {
+                "tag_title": first_file.tag_title,
+                "tag_author": first_file.tag_author,
+                "tag_album": first_file.tag_album,
+                "tag_year": first_file.tag_year,
+                "tag_narrator": first_file.tag_narrator,
+            }
+
+        export.append({
+            "id": book.id,
+            "folder_path": folder_path,
+            "folder_name": folder_name,
+            "title": book.title,
+            "author": book.author,
+            "series": book.series,
+            "series_position": book.series_position,
+            "year": book.year,
+            "narrator": book.narrator,
+            "confidence": book.confidence,
+            "source": book.source,
+            "is_confirmed": book.is_confirmed,
+            "projected_path": projected,
+            "file_count": len(book.files),
+            "tags_from_file": tag_info,
+        })
+
+    return JSONResponse(content={
+        "total": len(export),
+        "pattern": pattern,
+        "output_root": root,
+        "books": export,
+    })
 
 
 @router.get("/{book_id}", response_model=BookDetailResponse)

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Check, Edit3, Loader2, Search, CheckCheck } from 'lucide-react';
+import { Check, Edit3, Loader2, Search, CheckCheck, Download } from 'lucide-react';
 import {
   useBooks,
   useConfirmBook,
   useConfirmBatch,
   useUpdateBook,
 } from '@/hooks/useBooks';
+import { exportBooks } from '@/api/client';
 import ConfidenceBadge from '@/components/ConfidenceBadge';
 import SourceBadge from '@/components/SourceBadge';
 import BookEditModal from '@/components/BookEditModal';
@@ -26,6 +27,22 @@ export default function ReviewPage() {
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [searchingBook, setSearchingBook] = useState<Book | null>(null);
+
+  const handleExport = async () => {
+    try {
+      const data = await exportBooks(scanId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `audiobook-export${scanId ? `-scan${scanId}` : ''}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Export downloaded');
+    } catch {
+      toast.error('Export failed');
+    }
+  };
 
   const handleConfirmHighConfidence = () => {
     confirmBatch.mutate(
@@ -58,15 +75,26 @@ export default function ReviewPage() {
             {scanId && ` (Scan #${scanId})`}
           </p>
         </div>
-        <button
-          onClick={handleConfirmHighConfidence}
-          disabled={confirmBatch.isPending}
-          className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white"
-          style={{ backgroundColor: 'var(--color-success)' }}
-        >
-          <CheckCheck size={16} />
-          Confirm All High-Confidence
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 px-3 py-2 rounded text-sm font-medium border"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+            title="Export matching diagnostics as JSON"
+          >
+            <Download size={16} />
+            Export
+          </button>
+          <button
+            onClick={handleConfirmHighConfidence}
+            disabled={confirmBatch.isPending}
+            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white"
+            style={{ backgroundColor: 'var(--color-success)' }}
+          >
+            <CheckCheck size={16} />
+            Confirm All High-Confidence
+          </button>
+        </div>
       </div>
 
       {/* Book list */}

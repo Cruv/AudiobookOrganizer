@@ -111,6 +111,13 @@ export const applyLookup = (
     body: JSON.stringify(data),
   });
 
+// Export
+export const exportBooks = async (scanId?: number) => {
+  const params = scanId != null ? `?scan_id=${scanId}` : '';
+  const resp = await fetch(`${BASE}/books/export${params}`);
+  return resp.json();
+};
+
 // Organize
 export const previewOrganize = (book_ids: number[]) =>
   request<{ items: OrganizePreviewItem[] }>('/organize/preview', {
