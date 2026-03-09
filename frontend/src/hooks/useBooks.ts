@@ -11,6 +11,7 @@ export function useBooks(params?: {
   return useQuery({
     queryKey: ['books', params],
     queryFn: () => api.getBooks(params),
+    staleTime: 0, // Always refetch on mount — book data changes after scans/lookups
   });
 }
 
