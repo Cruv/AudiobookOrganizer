@@ -580,6 +580,28 @@ def merge_with_tags(
         elif not parsed.title:
             parsed.title = tag_album
             parsed.confidence = min(parsed.confidence + 0.05, 1.0)
+        elif parsed.title and parsed.author:
+            # Check if parsed title is actually the author name
+            # (happens when folder = author, not book title)
+            title_words = set(re.sub(r"[^a-z0-9 ]", "", parsed.title.lower()).split())
+            author_words = set(re.sub(r"[^a-z0-9 ]", "", parsed.author.lower()).split())
+            if title_words and title_words.issubset(author_words):
+                parsed.title = tag_album
+                parsed.confidence = min(parsed.confidence + 0.05, 1.0)
+
+    # Use tag series if available (from grouping/contentgroup tags)
+    tag_series = tags.get("series")
+    if _is_generic_value(tag_series):
+        tag_series = None
+    if tag_series:
+        if parsed.series and fuzzy_match(parsed.series, tag_series):
+            parsed.confidence = min(parsed.confidence + 0.05, 1.0)
+        elif not parsed.series:
+            parsed.series = tag_series
+            parsed.confidence = min(parsed.confidence + 0.05, 1.0)
+        else:
+            # Parsed and tag series disagree - prefer tag
+            parsed.series = tag_series
 
     # Use individual track title to extract series info
     if tag_title and tag_album and tag_title != tag_album:
