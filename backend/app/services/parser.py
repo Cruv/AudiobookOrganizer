@@ -181,6 +181,10 @@ def _extract_series_position(text: str) -> tuple[str | None, str]:
         match = pattern.search(text)
         if match:
             position = match.group(1)
+            # Skip range patterns: "Book 1-7" means books 1 through 7, not position 1
+            rest = text[match.end():]
+            if re.match(r"\s*[-–—]\s*\d+", rest):
+                continue
             # Remove the series position pattern from text
             cleaned = text[: match.start()] + text[match.end() :]
             cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -406,12 +410,18 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
             if bracket_pos:
                 pos = bracket_pos
 
+            # Lower confidence when author looks suspect (franchise, range, etc.)
+            # so leaf-name strategies that correctly parse author can win
+            confidence = 0.85
+            if _is_suspect_author(author):
+                confidence = 0.65
+
             return ParsedMetadata(
                 author=author,
                 series=series,
                 series_position=pos,
                 title=_sanitize_name(title_clean) if title_clean else title,
-                confidence=0.85,
+                confidence=confidence,
             )
 
     if len(parts) >= 2:
