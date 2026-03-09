@@ -231,6 +231,125 @@ async def search_itunes(
     return results
 
 
+AUDIBLE_AUTH_FILE = "/config/audible_auth.json"
+
+# Region to TLD mapping for Audible API
+AUDIBLE_LOCALE_MAP = {
+    "us": "us", "uk": "uk", "au": "au", "ca": "ca",
+    "de": "de", "fr": "fr", "in": "in", "it": "it",
+    "jp": "jp", "es": "es",
+}
+
+
+async def search_audible(
+    title: str,
+    author: str | None,
+    db: Session,
+    locale: str = "us",
+) -> list[LookupResult]:
+    """Search Audible catalog API for audiobooks using the audible package."""
+    import os
+
+    if not os.path.exists(AUDIBLE_AUTH_FILE):
+        return []
+
+    query = clean_query(title, author)
+    if not query:
+        return []
+
+    cache_query = f"audible:{locale}:{query}"
+    cached = _get_cached(cache_query, "audible", db)
+    if cached is not None:
+        return cached
+
+    results: list[LookupResult] = []
+    try:
+        import audible
+
+        auth = audible.Authenticator.from_file(AUDIBLE_AUTH_FILE)
+        async with audible.AsyncClient(auth=auth) as client:
+            params = {
+                "title": title,
+                "num_results": 5,
+                "response_groups": (
+                    "contributors,product_attrs,product_desc,media,series"
+                ),
+                "products_sort_by": "Relevance",
+            }
+            if author:
+                params["author"] = author
+
+            data = await client.get(
+                "1.0/catalog/products", **params
+            )
+
+        for product in (data.get("products") or [])[:5]:
+            item_title = product.get("title", "")
+
+            # Authors
+            authors_list = [
+                a.get("name", "")
+                for a in (product.get("authors") or [])
+                if a.get("name")
+            ]
+            item_author = authors_list[0] if authors_list else None
+
+            # Narrators
+            narrators_list = [
+                n.get("name", "")
+                for n in (product.get("narrators") or [])
+                if n.get("name")
+            ]
+            item_narrator = ", ".join(narrators_list) if narrators_list else None
+
+            # Release date / year
+            release_date = product.get("release_date") or ""
+            year = release_date[:4] if len(release_date) >= 4 else None
+
+            # Series info
+            series_name = None
+            series_pos = None
+            series_list = product.get("series") or []
+            if series_list:
+                primary = series_list[0]
+                series_name = primary.get("title")
+                series_pos = primary.get("sequence")
+
+            # Cover image
+            images = product.get("product_images") or {}
+            cover_url = images.get("500") or images.get("1024") or None
+
+            # Description
+            summary = product.get("publisher_summary") or ""
+
+            # Clean title
+            if item_title:
+                item_title = re.sub(
+                    r"\s*\(Unabridged\)", "", item_title, flags=re.IGNORECASE
+                ).strip()
+
+            results.append(
+                LookupResult(
+                    provider="audible",
+                    title=item_title or None,
+                    author=item_author,
+                    series=series_name,
+                    series_position=series_pos,
+                    year=year,
+                    narrator=item_narrator,
+                    description=summary[:200] if summary else None,
+                    cover_url=cover_url,
+                    confidence=0.92,
+                )
+            )
+
+    except Exception:
+        pass
+
+    _set_cached(cache_query, "audible", results, db)
+    return results
+
+
 async def lookup_book(
     title: str,
     author: str | None,
@@ -238,11 +357,13 @@ async def lookup_book(
     db: Session,
 ) -> list[LookupResult]:
     """Search all APIs and return deduplicated results, best first."""
+    audible_results = await search_audible(title, author, db)
     google_results = await search_google_books(title, author, api_key, db)
     ol_results = await search_openlibrary(title, author, db)
     itunes_results = await search_itunes(title, author, db)
 
-    all_results = itunes_results + google_results + ol_results
+    # Audible first so it wins dedup with highest confidence
+    all_results = audible_results + itunes_results + google_results + ol_results
 
     # Deduplicate by title+author similarity
     deduped = _deduplicate_results(all_results)
@@ -278,6 +399,8 @@ def _deduplicate_results(results: list[LookupResult]) -> list[LookupResult]:
                         result.year = existing.year
                     if not result.cover_url and existing.cover_url:
                         result.cover_url = existing.cover_url
+                    if not result.narrator and existing.narrator:
+                        result.narrator = existing.narrator
                     seen.remove(existing)
                     seen.append(result)
                 else:
@@ -288,6 +411,8 @@ def _deduplicate_results(results: list[LookupResult]) -> list[LookupResult]:
                         existing.year = result.year
                     if not existing.cover_url and result.cover_url:
                         existing.cover_url = result.cover_url
+                    if not existing.narrator and result.narrator:
+                        existing.narrator = result.narrator
                 is_dup = True
                 break
         if not is_dup:

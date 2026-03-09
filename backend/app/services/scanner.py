@@ -18,7 +18,7 @@ from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_folder_t
 from app.services.parser import ParsedMetadata, auto_match_score, clean_narrator, detect_edition, merge_with_tags, parse_folder_path
 
 MAX_DEPTH = 6
-AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 0.70
+AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 1.0  # Look up ALL books online (no parsed book reaches 1.0)
 AUTO_APPLY_MATCH_THRESHOLD = 0.85
 
 
@@ -87,18 +87,25 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
 
 
 async def _auto_lookup_books(books: list[Book], db: Session) -> None:
-    """Auto-lookup metadata for low-confidence books and apply best matches."""
+    """Auto-lookup metadata for all books and apply best matches."""
+    import logging
+
     from app.services.lookup import lookup_book
-    from app.services.parser import clean_query
+    from app.services.parser import clean_query, clean_narrator
+
+    logger = logging.getLogger(__name__)
 
     api_key_setting = db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     api_key = api_key_setting.value if api_key_setting else None
 
-    for book in books:
+    total = len(books)
+    for idx, book in enumerate(books):
         try:
             query = clean_query(book.title, book.author)
             if not query or len(query) < 3:
                 continue
+
+            logger.info(f"Auto-lookup {idx + 1}/{total}: {query}")
 
             results = await lookup_book(query, book.author, api_key, db)
             if not results:
@@ -133,9 +140,17 @@ async def _auto_lookup_books(books: list[Book], db: Session) -> None:
                     book.series_position = best_result.series_position
                 if best_result.year and not book.year:
                     book.year = best_result.year
+                # Apply narrator from online source if we don't have one
+                if best_result.narrator and not book.narrator:
+                    book.narrator = clean_narrator(best_result.narrator, book.edition)
+                # Preserve edition — online APIs don't know about GA editions
                 book.source = f"auto:{best_result.provider}"
-                book.confidence = min(book.confidence + 0.20, 0.95)
+                # Use the higher of local confidence or online provider confidence
+                book.confidence = max(book.confidence, min(best_result.confidence, 0.95))
                 db.commit()
+
+            # Rate limit: small delay between books to avoid API throttling
+            await asyncio.sleep(0.3)
 
         except Exception:
             continue

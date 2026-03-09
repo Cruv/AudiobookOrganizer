@@ -74,6 +74,7 @@ class LookupResult(BaseModel):
     series: str | None
     series_position: str | None
     year: str | None
+    narrator: str | None = None
     description: str | None
     cover_url: str | None
     confidence: float

@@ -33,7 +33,7 @@ export interface Book {
   year: string | null;
   narrator: string | null;
   edition: string | null;
-  source: 'parsed' | 'tag' | 'google_books' | 'openlibrary' | 'manual';
+  source: string;
   confidence: number;
   is_confirmed: boolean;
   output_path: string | null;
@@ -74,6 +74,7 @@ export interface LookupResult {
   series: string | null;
   series_position: string | null;
   year: string | null;
+  narrator: string | null;
   description: string | null;
   cover_url: string | null;
   confidence: number;
@@ -107,6 +108,7 @@ export interface Settings {
   output_pattern: string;
   output_root: string;
   google_books_api_key: string | null;
+  audible_locale: string | null;
 }
 
 export interface PatternPreview {

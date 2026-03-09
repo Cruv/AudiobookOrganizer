@@ -165,3 +165,23 @@ export const updateSettings = (data: Partial<Settings>) =>
 
 export const previewPattern = (pattern: string) =>
   request<PatternPreview>(`/settings/preview-pattern?pattern=${encodeURIComponent(pattern)}`);
+
+// Audible
+export const getAudibleStatus = () =>
+  request<{ connected: boolean; locale: string | null }>('/settings/audible/status');
+
+export const getAudibleLoginUrl = (locale: string = 'us') =>
+  request<{ login_url: string }>(`/settings/audible/login-url?locale=${locale}`, {
+    method: 'POST',
+  });
+
+export const authorizeAudible = (response_url: string, locale: string = 'us') =>
+  request<{ connected: boolean; locale: string | null }>('/settings/audible/authorize', {
+    method: 'POST',
+    body: JSON.stringify({ response_url, locale }),
+  });
+
+export const disconnectAudible = () =>
+  request<{ detail: string }>('/settings/audible/disconnect', {
+    method: 'DELETE',
+  });

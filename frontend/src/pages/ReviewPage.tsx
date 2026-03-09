@@ -19,7 +19,8 @@ export default function ReviewPage() {
   const [searchParams] = useSearchParams();
   const scanId = searchParams.get('scan_id') ? Number(searchParams.get('scan_id')) : undefined;
 
-  const { data: books, isLoading } = useBooks({ scan_id: scanId, sort: 'confidence' });
+  const [sort, setSort] = useState('confidence');
+  const { data: books, isLoading } = useBooks({ scan_id: scanId, sort });
   const confirmBook = useConfirmBook();
   const confirmBatch = useConfirmBatch();
   const updateBook = useUpdateBook();
@@ -74,6 +75,21 @@ export default function ReviewPage() {
             {confirmedCount} / {totalCount} confirmed
             {scanId && ` (Scan #${scanId})`}
           </p>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+            className="mt-2 rounded border px-2 py-1.5 text-sm outline-none"
+            style={{
+              backgroundColor: 'var(--color-surface)',
+              borderColor: 'var(--color-border)',
+              color: 'var(--color-text)',
+            }}
+          >
+            <option value="confidence">Confidence (Low first)</option>
+            <option value="confidence_desc">Confidence (High first)</option>
+            <option value="title">Title (A-Z)</option>
+            <option value="author">Author (A-Z)</option>
+          </select>
         </div>
         <div className="flex items-center gap-2">
           <button
