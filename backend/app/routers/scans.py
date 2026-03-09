@@ -27,13 +27,12 @@ def browse_directory(path: str = Query(default="/")):
     # Resolve to absolute path and prevent directory traversal
     resolved = str(pathlib.Path(path).resolve())
 
-    # Block access to sensitive system directories
+    # Block access to sensitive system directories and app data (contains auth tokens, DB)
     for blocked in BROWSE_BLOCKED_PATHS:
         if resolved == blocked or resolved.startswith(blocked + "/"):
             raise HTTPException(status_code=403, detail="Access denied")
 
-    # Block access to the config directory (contains Audible auth tokens)
-    if resolved == "/config" or resolved.startswith("/config/"):
+    if resolved == "/app/data" or resolved.startswith("/app/data/"):
         raise HTTPException(status_code=403, detail="Access denied")
 
     path = resolved

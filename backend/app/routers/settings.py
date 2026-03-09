@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 SETTINGS_KEYS = ["output_pattern", "output_root", "google_books_api_key", "audible_locale"]
 
-AUDIBLE_AUTH_FILE = "/config/audible_auth.json"
+AUDIBLE_AUTH_FILE = "/app/data/audible_auth.json"
 
 # Allowed domains for Audible OAuth response URLs
 AUDIBLE_ALLOWED_REDIRECT_DOMAINS = {
@@ -323,9 +323,6 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
     locale = body.locale or session.get("locale", "us")
 
     try:
-        # Ensure /config directory exists
-        os.makedirs(os.path.dirname(AUDIBLE_AUTH_FILE), exist_ok=True)
-
         # Save auth to persistent file with restrictive permissions
         auth.to_file(AUDIBLE_AUTH_FILE)
         os.chmod(AUDIBLE_AUTH_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 0600

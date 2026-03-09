@@ -38,7 +38,6 @@ adduser -u "${PUID}" -G abc -D -h /app abc
 
 # Set ownership of writable directories
 chown -R abc:abc /app/data
-chown -R abc:abc /config
 chown -R abc:abc /var/lib/nginx
 chown -R abc:abc /var/log/nginx
 chown -R abc:abc /run/nginx 2>/dev/null || mkdir -p /run/nginx && chown -R abc:abc /run/nginx

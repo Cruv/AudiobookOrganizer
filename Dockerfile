@@ -26,8 +26,8 @@ COPY nginx.conf /etc/nginx/nginx.conf
 COPY docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Create data and config directories
-RUN mkdir -p /app/data /config
+# Create data directory
+RUN mkdir -p /app/data
 
 EXPOSE 80
 

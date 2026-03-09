@@ -234,7 +234,7 @@ async def search_itunes(
     return results
 
 
-AUDIBLE_AUTH_FILE = "/config/audible_auth.json"
+AUDIBLE_AUTH_FILE = "/app/data/audible_auth.json"
 
 # Region to TLD mapping for Audible API
 AUDIBLE_LOCALE_MAP = {
