@@ -4,7 +4,7 @@
 Web-based audiobook organizer that scans directories, auto-identifies metadata (title, author, series, year, narrator), and organizes files into Chaptarr/Audiobookshelf-compatible folder structures using a copy+purge model.
 
 ## Tech Stack
-- **Backend**: Python 3.12, FastAPI, SQLAlchemy (legacy Query API), SQLite, mutagen, httpx
+- **Backend**: Python 3.12, FastAPI, SQLAlchemy (legacy Query API), SQLite, mutagen, httpx, audible
 - **Frontend**: React 19, TypeScript, Vite 7, TanStack Query v5, Tailwind CSS v4, Lucide React, React Router DOM v7
 - **Container**: Multi-stage Dockerfile (Node 22 Alpine + Python 3.12 Alpine), LinuxServer.io PUID/PGID style, nginx reverse proxy
 - **CI/CD**: GitHub Actions -> ghcr.io (`ghcr.io/cruv/audiobookorganizer:latest`)
@@ -26,7 +26,7 @@ backend/app/
     scanner.py         # _find_audiobook_folders, _process_folder, auto-lookup
     parser.py          # Regex strategies, fuzzy_match, clean_query, auto_match_score
     metadata.py        # mutagen tag reading, read_folder_tags consensus
-    lookup.py          # Google Books, OpenLibrary, iTunes APIs + caching + dedup
+    lookup.py          # Audible, Google Books, OpenLibrary, iTunes APIs + caching + dedup
     organizer.py       # build_output_path, organize_book, token pattern system
 frontend/src/
   pages/               # ScanPage, ReviewPage, OrganizePage, PurgePage, SettingsPage
@@ -49,44 +49,46 @@ frontend/src/
 2. **Tag reading** (`metadata.py`): Reads mutagen tags from up to 10 audio files per folder, builds consensus
 3. **Edition detection** (`parser.py:detect_edition`): Detects Graphic Audio editions from folder path, folder name markers `(GA)`, tag_author being "GraphicAudio", or `[Dramatized Adaptation]` in tags
 4. **Merge** (`parser.py:merge_with_tags`): Tags win for author/title when non-generic; GraphicAudio rejected as author; boosts confidence on agreement
-5. **Auto-lookup** (`scanner.py`): Books with confidence < 0.70 get automatic online lookup via iTunes + Google Books + OpenLibrary
-6. **Auto-apply** (`scanner.py`): Best lookup result applied if auto_match_score >= 0.85
+5. **Narrator cleanup** (`parser.py:clean_narrator`): Rejects publishers as narrator, strips role descriptions, normalizes GA casts
+6. **Auto-lookup** (`scanner.py`): ALL books get online lookup via Audible + iTunes + Google Books + OpenLibrary (threshold = 1.0)
+7. **Auto-apply** (`scanner.py`): Best lookup result applied if auto_match_score >= 0.85. Narrator applied from lookup results
 
-## Current Status (Last Updated: 2026-03-08)
+## Current Status (Last Updated: 2026-03-09)
 
 ### What's Working
-- Full scan pipeline: directory walk -> folder parse -> tag read -> DB records
-- Review page with confidence badges, source/output path preview, edit modal
-- **Edition detection**: Graphic Audio auto-detected from folder path, folder name `(GA)`, tag_author "GraphicAudio", and `[Dramatized Adaptation]` tags. Edition shown as purple badge on ReviewPage, editable in BookEditModal
-- **Edition output tokens**: `{Edition}` and `{EditionBracketed}` (wraps in `[]`) for output path patterns. Empty edition collapses cleanly
-- **GA author fix**: "GraphicAudio", "Graphic Audio LLC." etc. rejected as author in `merge_with_tags`, falls back to folder path author
-- **GA title cleaning**: `(GA)`, `(GraphicAudio)`, `[Dramatized Adaptation]` stripped from parsed titles
-- **Narrator normalization**: `clean_narrator()` function rejects publishers, strips role descriptions, normalizes GA cast lists, cleans trailing punctuation
-- **Series dedup**: Series matching author name auto-cleared; GA- prefix stripped from series
-- **Author-in-title stripping**: Author name appended to title end is auto-removed
+- Full scan pipeline: directory walk → folder parse → tag read → online lookup → DB records
+- **Review page**: Confidence badges, source/output path preview, edit modal, **sort dropdown** (title, author, confidence)
+- **Edition detection**: Graphic Audio auto-detected from folder path, folder name `(GA)`, tag_author "GraphicAudio", and `[Dramatized Adaptation]` tags
+- **4 Lookup Providers**: Audible (0.92), iTunes (0.90), Google Books (0.85), OpenLibrary (0.80) — all with 30-day caching
+- **Audible integration**: Uses `audible` Python package with external browser auth flow. Settings page has Connect/Disconnect UI with marketplace selector. Auth persisted to `/config/audible_auth.json`
+- **Online lookup for ALL books**: Threshold raised to 1.0 — every book gets searched online during scan. 0.3s rate limiting between lookups. Narrator applied from online results
+- **Narrator from Audible**: LookupResult now includes narrator field. Audible uniquely provides narrator in search results. Applied during auto-lookup when book has no narrator
+- **GA author fix**: "GraphicAudio" rejected as author, falls back to folder path author
+- **Narrator normalization**: `clean_narrator()` rejects publishers, strips role descriptions, normalizes GA casts
+- **Series dedup**: Series matching author name auto-cleared; GA- prefix stripped
+- **Author-in-title stripping**: Author name appended to title end auto-removed
 - **Franchise author detection**: "Warhammer", "Horus Heresy", "Stormlight", etc. caught by suspect patterns
 - Manual search modal (SearchModal) for custom metadata queries
 - Toast notifications on actions
 - Directory browser on Scan page
-- Export diagnostics button (GET /api/books/export) with edition field
-- iTunes/Apple Books API + Google Books + OpenLibrary lookups with caching + dedup
-- Multi-file tag consensus (reads up to 10 files, most common values)
-- Scan logging visible in Docker logs
+- Export diagnostics button with edition field
+- Multi-file tag consensus (reads up to 10 files)
 - Organize (copy) and Purge (delete source) workflows
-- Browser HTTP cache fix: `cache: 'no-store'` on fetch + nginx `Cache-Control: no-store` for API
+- Browser HTTP cache fix: `cache: 'no-store'` on fetch + nginx
 
 ### Next Steps (Priority Order)
-1. **Re-scan and verify all fixes**: Run a new scan to verify GA books get correct authors, clean titles, proper narrators, and series dedup
-2. **Handle multi-part audiobooks**: 34 GA entries are split into Part 01, Part 02 etc. These should be grouped as a single book. All multi-part entries are GA books. (Title fallback to parent folder is implemented, but books still create separate entries)
-3. **Auto-lookup integration**: Verify auto-lookup triggers correctly during scan and test with real data
-4. **UI polish**: Pagination for large book lists, sort controls, filter by confidence/edition, bulk operations
-5. **Scattered GA copies**: 9 GA copies of Mistborn/Stormlight live outside `/Graphic Audio Collection/` folder, creating duplicates
+1. **Re-scan and verify all fixes**: Run a new scan to verify all parser fixes, online lookup, and Audible integration
+2. **Test Audible auth flow**: Connect Audible in Settings page, verify search results during scan
+3. **Handle multi-part audiobooks**: 34 GA entries split into Part 01, Part 02. Title falls back to parent but books still create separate entries. Need grouping logic
+4. **UI polish**: Pagination for large book lists, filter by confidence/edition, bulk operations
+5. **Scattered GA copies**: 9 GA copies of Mistborn/Stormlight outside `/Graphic Audio Collection/`
 
 ### Known Issues
-- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all Graphic Audio). Title now falls back to parent folder, but grouping not implemented
-- 9 "scattered" GA copies of Mistborn/Stormlight live outside `/Graphic Audio Collection/` folder, creating duplicates
-- Scan progress bar updates via polling (1.5s interval) - works but could use WebSocket for real-time updates
-- Existing DB data needs re-scan to populate new `edition` column and apply all parser fixes
+- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all GA)
+- First scan with online lookup will be slow (~5-10 min for 254 books × 4 providers). Subsequent scans use cache
+- Audible API response structure is based on community docs — field names may differ, silently returns empty on error
+- 9 "scattered" GA copies outside main collection creating duplicates
+- Scan progress bar via polling (1.5s interval) doesn't show lookup phase progress
 
 ### Export Data Analysis (254 books, scan 1)
 - **146 GA books** (57.5%) — detected by folder path containing "Graphic Audio" (100% coverage)
@@ -98,7 +100,22 @@ frontend/src/
 - **11 had empty () in titles** — now cleaned by `_clean_text` and post-merge cleanup
 - **12+ had author name in title** — now stripped by word-matching in `merge_with_tags`
 
-### Recent Changes (Session 2026-03-08)
+### Recent Changes (Session 2026-03-09)
+- **Audible + Sort + Online Lookup** (commit `cd0301a`):
+  - `search_audible()` in lookup.py: Uses `audible` Python package, confidence 0.92, extracts narrator/series/cover
+  - Audible auth flow: `from_login_external()` with browser URL callback, persisted to /config/audible_auth.json
+  - New endpoints: `GET /api/settings/audible/status`, `POST .../login-url`, `POST .../authorize`, `DELETE .../disconnect`
+  - Settings page: Audible connection UI with marketplace selector, step-by-step auth instructions
+  - Sort dropdown on ReviewPage: title, author, confidence (low/high)
+  - `AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 1.0` — all books searched online
+  - Narrator field added to `LookupResult` schema (backend + frontend)
+  - Narrator applied from lookup results in `_auto_lookup_books()`
+  - Confidence now uses `max(local, online)` instead of `+0.20` bump
+  - Rate limiting: 0.3s delay between book lookups
+  - Progress logging: "Auto-lookup N/M: query" in Docker logs
+  - `Book.source` type relaxed to `string` for `auto:audible` etc.
+
+### Previous Changes (Session 2026-03-08)
 - **Batch parser fixes** (commit `782db59`):
   - `clean_narrator()`: Rejects publishers (Black Library, Heavy Entertainment, etc.) as narrator, extracts real name from GA bracket patterns, strips "as Character" role descriptions, strips trailing `;` `.` punctuation, normalizes long GA cast lists to "Full Cast"
   - `GA_SERIES_PREFIX`: Strips "GA - " prefix from series names
