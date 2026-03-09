@@ -68,9 +68,12 @@ DRAMATIZED_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Multi-part indicators: "(Part 2 of 2)", "Part 1 of 3" - NOT series positions
+# Multi-part indicators - NOT series positions:
+#   "(Part 2 of 2)", "Part 1 of 3" - with "Part" keyword (parens optional)
+#   "(3 of 3)" - parenthesized N of M (parens required when no "Part")
 MULTI_PART_PATTERN = re.compile(
-    r"\(?\s*Part\s+\d+\s+of\s+\d+\s*\)?", re.IGNORECASE
+    r"\(\s*(?:Part\s+)?\d+\s+of\s+\d+\s*\)|Part\s+\d+\s+of\s+\d+",
+    re.IGNORECASE,
 )
 
 # Bracket series position: [04], [01], [1] - book number in brackets
