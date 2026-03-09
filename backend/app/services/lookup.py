@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.models.lookup_cache import LookupCache
 from app.schemas.book import LookupResult
 from app.services.parser import clean_query, fuzzy_match
+
+logger = logging.getLogger(__name__)
 
 
 CACHE_DURATION_DAYS = 30
@@ -76,8 +79,8 @@ async def search_google_books(
                 )
             )
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Google Books search failed for '%s': %s", title, type(e).__name__)
 
     _set_cached(query, "google_books", results, db)
     return results
@@ -132,8 +135,8 @@ async def search_openlibrary(
                 )
             )
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("OpenLibrary search failed for '%s': %s", title, type(e).__name__)
 
     _set_cached(query, "openlibrary", results, db)
     return results
@@ -224,8 +227,8 @@ async def search_itunes(
                 )
             )
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("iTunes search failed for '%s': %s", title, type(e).__name__)
 
     _set_cached(query, "itunes", results, db)
     return results
@@ -343,8 +346,8 @@ async def search_audible(
                 )
             )
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Audible search failed for '%s': %s", title, type(e).__name__)
 
     _set_cached(cache_query, "audible", results, db)
     return results

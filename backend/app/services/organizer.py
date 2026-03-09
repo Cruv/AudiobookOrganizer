@@ -82,7 +82,15 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
         fallback = sanitize_path_component(book.title or "Unknown")
         resolved_segments = [fallback]
 
-    return os.path.join(output_root, *resolved_segments)
+    full_path = os.path.join(output_root, *resolved_segments)
+
+    # Security: ensure the resolved path stays within the output_root
+    resolved_full = os.path.realpath(full_path)
+    resolved_root = os.path.realpath(output_root)
+    if not resolved_full.startswith(resolved_root + os.sep) and resolved_full != resolved_root:
+        raise ValueError("Output path escapes output root directory")
+
+    return full_path
 
 
 def preview_output_path(book: Book, pattern: str, output_root: str) -> str:

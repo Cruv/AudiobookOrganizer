@@ -41,6 +41,7 @@ export default function SettingsPage() {
   const [audibleLocale, setAudibleLocale] = useState('us');
   const [audibleLoginUrl, setAudibleLoginUrl] = useState('');
   const [audibleResponseUrl, setAudibleResponseUrl] = useState('');
+  const [audibleSessionToken, setAudibleSessionToken] = useState('');
   const [audibleLoading, setAudibleLoading] = useState(false);
 
   const { data: preview } = usePreviewPattern(pattern);
@@ -82,8 +83,9 @@ export default function SettingsPage() {
   const handleAudibleConnect = async () => {
     setAudibleLoading(true);
     try {
-      const { login_url } = await getAudibleLoginUrl(audibleLocale);
+      const { login_url, session_token } = await getAudibleLoginUrl(audibleLocale);
       setAudibleLoginUrl(login_url);
+      setAudibleSessionToken(session_token);
     } catch (e) {
       toast.error('Failed to generate Audible login URL');
     } finally {
@@ -98,10 +100,11 @@ export default function SettingsPage() {
     }
     setAudibleLoading(true);
     try {
-      const status = await authorizeAudible(audibleResponseUrl, audibleLocale);
+      const status = await authorizeAudible(audibleResponseUrl, audibleLocale, audibleSessionToken);
       setAudibleConnected(status.connected);
       setAudibleLoginUrl('');
       setAudibleResponseUrl('');
+      setAudibleSessionToken('');
       toast.success('Audible connected successfully!');
     } catch (e) {
       toast.error('Audible authorization failed. Please try again.');

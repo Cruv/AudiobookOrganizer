@@ -171,14 +171,14 @@ export const getAudibleStatus = () =>
   request<{ connected: boolean; locale: string | null }>('/settings/audible/status');
 
 export const getAudibleLoginUrl = (locale: string = 'us') =>
-  request<{ login_url: string }>(`/settings/audible/login-url?locale=${locale}`, {
+  request<{ login_url: string; session_token: string }>(`/settings/audible/login-url?locale=${locale}`, {
     method: 'POST',
   });
 
-export const authorizeAudible = (response_url: string, locale: string = 'us') =>
+export const authorizeAudible = (response_url: string, locale: string = 'us', session_token: string = '') =>
   request<{ connected: boolean; locale: string | null }>('/settings/audible/authorize', {
     method: 'POST',
-    body: JSON.stringify({ response_url, locale }),
+    body: JSON.stringify({ response_url, locale, session_token }),
   });
 
 export const disconnectAudible = () =>

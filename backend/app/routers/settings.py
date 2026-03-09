@@ -1,5 +1,8 @@
 import logging
 import os
+import secrets
+import stat
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -25,8 +28,33 @@ SETTINGS_KEYS = ["output_pattern", "output_root", "google_books_api_key", "audib
 
 AUDIBLE_AUTH_FILE = "/config/audible_auth.json"
 
-# In-memory storage for pending login flow
-_pending_audible_login: dict = {}
+# Allowed domains for Audible OAuth response URLs
+AUDIBLE_ALLOWED_REDIRECT_DOMAINS = {
+    "www.amazon.com",
+    "amazon.com",
+    "www.amazon.co.uk",
+    "amazon.co.uk",
+    "www.amazon.ca",
+    "amazon.ca",
+    "www.amazon.com.au",
+    "amazon.com.au",
+    "www.amazon.de",
+    "amazon.de",
+    "www.amazon.fr",
+    "amazon.fr",
+    "www.amazon.it",
+    "amazon.it",
+    "www.amazon.in",
+    "amazon.in",
+    "www.amazon.co.jp",
+    "amazon.co.jp",
+    "www.amazon.es",
+    "amazon.es",
+}
+
+# Per-session storage for pending login flow, keyed by CSRF token
+# Each entry: {"locale": str, "login_url": str}
+_pending_audible_logins: dict[str, dict] = {}
 
 
 @router.get("", response_model=SettingsResponse)
@@ -36,12 +64,16 @@ def get_settings(db: Session = Depends(get_db)):
     for setting in db.query(UserSetting).filter(UserSetting.key.in_(SETTINGS_KEYS)).all():
         settings_map[setting.key] = setting.value
 
+    # Mask API key — only show last 4 chars so the frontend knows if one is set
+    raw_key = settings_map.get("google_books_api_key")
+    masked_key = f"****{raw_key[-4:]}" if raw_key and len(raw_key) > 4 else raw_key
+
     return SettingsResponse(
         output_pattern=settings_map.get(
             "output_pattern", app_settings.default_output_pattern
         ),
         output_root=settings_map.get("output_root", app_settings.default_output_root),
-        google_books_api_key=settings_map.get("google_books_api_key"),
+        google_books_api_key=masked_key,
         audible_locale=settings_map.get("audible_locale", "us"),
     )
 
@@ -53,6 +85,10 @@ def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
 
     for key, value in update_data.items():
         if key not in SETTINGS_KEYS:
+            continue
+
+        # Don't overwrite a real API key with the masked version sent back from GET
+        if key == "google_books_api_key" and value and value.startswith("****"):
             continue
 
         existing = db.query(UserSetting).filter(UserSetting.key == key).first()
@@ -112,11 +148,17 @@ def audible_status(db: Session = Depends(get_db)):
 
 class AudibleLoginUrlResponse(BaseModel):
     login_url: str
+    session_token: str
 
 
 @router.post("/audible/login-url", response_model=AudibleLoginUrlResponse)
 def audible_login_url(locale: str = "us"):
     """Generate Audible login URL for external browser authorization."""
+    # Validate locale
+    valid_locales = {"us", "uk", "ca", "au", "de", "fr", "it", "in", "jp", "es"}
+    if locale not in valid_locales:
+        raise HTTPException(status_code=400, detail="Invalid locale")
+
     try:
         import audible
 
@@ -141,11 +183,20 @@ def audible_login_url(locale: str = "us"):
         if not login_url:
             raise HTTPException(status_code=500, detail="Failed to generate login URL")
 
-        # Store locale for the authorize step
-        _pending_audible_login["locale"] = locale
-        _pending_audible_login["login_url"] = login_url
+        # Generate a CSRF token to tie this login flow to the authorize step
+        session_token = secrets.token_urlsafe(32)
 
-        return AudibleLoginUrlResponse(login_url=login_url)
+        # Clean up old pending logins (limit to 10 to prevent memory leak)
+        if len(_pending_audible_logins) > 10:
+            _pending_audible_logins.clear()
+
+        _pending_audible_logins[session_token] = {
+            "locale": locale,
+            "login_url": login_url,
+        }
+
+        logger.info("Audible login URL generated for locale=%s", locale)
+        return AudibleLoginUrlResponse(login_url=login_url, session_token=session_token)
 
     except ImportError:
         raise HTTPException(
@@ -155,20 +206,41 @@ def audible_login_url(locale: str = "us"):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Audible login URL generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Audible login URL generation failed: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="Failed to generate login URL")
 
 
 @router.post("/audible/authorize", response_model=AudibleStatus)
 def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
     """Complete Audible authorization with the redirect URL from browser."""
+    # Validate session token (CSRF protection)
+    if not body.session_token or body.session_token not in _pending_audible_logins:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired session. Please restart the Audible connection process.",
+        )
+
+    # Validate response_url — must be a valid Amazon domain
+    try:
+        parsed = urlparse(body.response_url.strip())
+        if parsed.scheme not in ("https", "http"):
+            raise ValueError("Invalid URL scheme")
+        if parsed.hostname not in AUDIBLE_ALLOWED_REDIRECT_DOMAINS:
+            raise ValueError(f"Unexpected redirect domain: {parsed.hostname}")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid redirect URL. Expected an Amazon URL from the login redirect.",
+        )
+
+    pending = _pending_audible_logins.pop(body.session_token)
+    locale = body.locale or pending.get("locale", "us")
+
     try:
         import audible
 
-        locale = body.locale or _pending_audible_login.get("locale", "us")
-
         def return_response_url(url: str) -> str:
-            return body.response_url
+            return body.response_url.strip()
 
         auth = audible.Authenticator.from_login_external(
             locale=locale,
@@ -178,9 +250,10 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
         # Ensure /config directory exists
         os.makedirs(os.path.dirname(AUDIBLE_AUTH_FILE), exist_ok=True)
 
-        # Save auth to persistent file
+        # Save auth to persistent file with restrictive permissions
         auth.to_file(AUDIBLE_AUTH_FILE)
-        logger.info("Audible authentication saved successfully")
+        os.chmod(AUDIBLE_AUTH_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        logger.info("Audible authentication saved successfully (permissions: 0600)")
 
         # Save locale to settings
         existing = db.query(UserSetting).filter(UserSetting.key == "audible_locale").first()
@@ -190,9 +263,6 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
             db.add(UserSetting(key="audible_locale", value=locale))
         db.commit()
 
-        # Clear pending state
-        _pending_audible_login.clear()
-
         return AudibleStatus(connected=True, locale=locale)
 
     except ImportError:
@@ -201,8 +271,8 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
             detail="audible package not installed",
         )
     except Exception as e:
-        logger.error(f"Audible authorization failed: {e}")
-        raise HTTPException(status_code=400, detail=f"Authorization failed: {e}")
+        logger.error("Audible authorization failed: %s", type(e).__name__)
+        raise HTTPException(status_code=400, detail="Authorization failed. Please try again.")
 
 
 @router.delete("/audible/disconnect")
@@ -210,5 +280,7 @@ def audible_disconnect():
     """Disconnect Audible by removing auth file."""
     if os.path.exists(AUDIBLE_AUTH_FILE):
         os.remove(AUDIBLE_AUTH_FILE)
-        logger.info("Audible auth file removed")
+        logger.info("Audible auth file removed (disconnected)")
+    # Clear any pending login sessions
+    _pending_audible_logins.clear()
     return {"detail": "Audible disconnected"}

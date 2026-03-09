@@ -28,3 +28,4 @@ class AudibleStatus(BaseModel):
 class AudibleAuthorize(BaseModel):
     response_url: str
     locale: str = "us"
+    session_token: str = ""

@@ -13,11 +13,33 @@ router = APIRouter(prefix="/api/scans", tags=["scans"])
 browse_router = APIRouter(prefix="/api", tags=["browse"])
 
 
+BROWSE_BLOCKED_PATHS = {
+    "/proc", "/sys", "/dev", "/run", "/boot", "/root",
+    "/etc/shadow", "/etc/passwd", "/etc/ssh",
+}
+
+
 @browse_router.get("/browse")
 def browse_directory(path: str = Query(default="/")):
     """List subdirectories at a given path for the directory browser."""
+    import pathlib
+
+    # Resolve to absolute path and prevent directory traversal
+    resolved = str(pathlib.Path(path).resolve())
+
+    # Block access to sensitive system directories
+    for blocked in BROWSE_BLOCKED_PATHS:
+        if resolved == blocked or resolved.startswith(blocked + "/"):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    # Block access to the config directory (contains Audible auth tokens)
+    if resolved == "/config" or resolved.startswith("/config/"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    path = resolved
+
     if not os.path.isdir(path):
-        raise HTTPException(status_code=400, detail=f"Not a valid directory: {path}")
+        raise HTTPException(status_code=400, detail="Not a valid directory")
 
     try:
         entries = sorted(os.listdir(path))
