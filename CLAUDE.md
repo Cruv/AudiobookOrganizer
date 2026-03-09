@@ -86,7 +86,7 @@ frontend/src/
 ### Known Issues
 - Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all GA)
 - First scan with online lookup will be slow (~5-10 min for 254 books × 4 providers). Subsequent scans use cache
-- Audible API response structure is based on community docs — field names may differ, silently returns empty on error
+- Audible API response structure is based on community docs — field names may differ (now logs warnings on error)
 - 9 "scattered" GA copies outside main collection creating duplicates
 - Scan progress bar via polling (1.5s interval) doesn't show lookup phase progress
 
@@ -101,6 +101,18 @@ frontend/src/
 - **12+ had author name in title** — now stripped by word-matching in `merge_with_tags`
 
 ### Recent Changes (Session 2026-03-09)
+- **Security hardening** (commit `7a27f6f`):
+  - Audible auth file: `os.chmod(AUDIBLE_AUTH_FILE, 0o600)` after save — only process owner can read
+  - CSRF protection: `session_token` (secrets.token_urlsafe) ties `login-url` → `authorize` requests
+  - Response URL validation: whitelist of Amazon domains in `AUDIBLE_ALLOWED_REDIRECT_DOMAINS`
+  - Browse endpoint: blocks `/proc`, `/sys`, `/dev`, `/root`, `/config` traversal; resolves symlinks
+  - Output path traversal: `os.path.realpath()` check ensures path stays within `output_root`
+  - API key masking: `GET /settings` returns `****last4` instead of raw key; `PUT` skips masked values
+  - Error sanitization: endpoints return generic messages, log `type(e).__name__` only (no stack traces to client)
+  - Nginx: `Content-Security-Policy` (whitelisted img-src for cover images), `Permissions-Policy` headers
+  - Lookup providers: `logger.warning()` on failure instead of silent `except: pass`
+  - Locale validation on Audible endpoints
+  - Memory leak prevention: caps pending login sessions at 10
 - **Audible + Sort + Online Lookup** (commit `cd0301a`):
   - `search_audible()` in lookup.py: Uses `audible` Python package, confidence 0.92, extracts narrator/series/cover
   - Audible auth flow: `from_login_external()` with browser URL callback, persisted to /config/audible_auth.json
