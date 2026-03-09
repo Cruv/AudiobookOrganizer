@@ -2,6 +2,8 @@ import logging
 import os
 import secrets
 import stat
+import threading
+import time
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -52,9 +54,10 @@ AUDIBLE_ALLOWED_REDIRECT_DOMAINS = {
     "amazon.es",
 }
 
-# Per-session storage for pending login flow, keyed by CSRF token
-# Each entry: {"locale": str, "login_url": str}
-_pending_audible_logins: dict[str, dict] = {}
+# Per-session storage for pending Audible login flows, keyed by session token.
+# Each session holds threading events + shared state so a single from_login_external()
+# call can span the login-url and authorize HTTP endpoints.
+_audible_sessions: dict[str, dict] = {}
 
 
 @router.get("", response_model=SettingsResponse)
@@ -135,6 +138,32 @@ def preview_pattern(pattern: str = Query(...)):
 
 
 # --- Audible Auth Endpoints ---
+#
+# The audible package's from_login_external() generates internal state (serial,
+# code_verifier) that MUST be consistent between the login URL and the response
+# URL. We cannot call it twice. Instead, we call it ONCE in a background thread:
+#
+#   1. login-url endpoint: starts from_login_external() in a background thread.
+#      The callback captures the login URL and then BLOCKS waiting for the
+#      response URL from the authorize endpoint.
+#   2. authorize endpoint: provides the response URL, which unblocks the
+#      background thread to complete the OAuth flow in a single call.
+#
+
+
+def _cleanup_stale_sessions() -> None:
+    """Remove sessions older than 10 minutes to prevent memory/thread leaks."""
+    now = time.monotonic()
+    stale = [
+        token for token, session in _audible_sessions.items()
+        if now - session.get("created_at", 0) > 600
+    ]
+    for token in stale:
+        session = _audible_sessions.pop(token, None)
+        if session:
+            # Signal the waiting thread so it can exit
+            session["response_url_ready"].set()
+            logger.info("Cleaned up stale Audible login session")
 
 
 @router.get("/audible/status", response_model=AudibleStatus)
@@ -153,68 +182,106 @@ class AudibleLoginUrlResponse(BaseModel):
 
 @router.post("/audible/login-url", response_model=AudibleLoginUrlResponse)
 def audible_login_url(locale: str = "us"):
-    """Generate Audible login URL for external browser authorization."""
+    """Generate Audible login URL for external browser authorization.
+
+    Starts from_login_external() in a background thread. The thread's callback
+    captures the login URL, then blocks until the authorize endpoint provides
+    the response URL.
+    """
     # Validate locale
     valid_locales = {"us", "uk", "ca", "au", "de", "fr", "it", "in", "jp", "es"}
     if locale not in valid_locales:
         raise HTTPException(status_code=400, detail="Invalid locale")
 
+    # Clean up any stale sessions first
+    _cleanup_stale_sessions()
+
     try:
-        import audible
-
-        login_url = None
-
-        def capture_url(url: str) -> str:
-            nonlocal login_url
-            login_url = url
-            # Return a placeholder — we'll complete auth in the authorize endpoint
-            return "https://placeholder.invalid/pending"
-
-        try:
-            audible.Authenticator.from_login_external(
-                locale=locale,
-                login_url_callback=capture_url,
-            )
-        except Exception:
-            # Expected — the callback returns a fake URL which causes auth to fail
-            # But we've captured the login_url
-            pass
-
-        if not login_url:
-            raise HTTPException(status_code=500, detail="Failed to generate login URL")
-
-        # Generate a CSRF token to tie this login flow to the authorize step
-        session_token = secrets.token_urlsafe(32)
-
-        # Clean up old pending logins (limit to 10 to prevent memory leak)
-        if len(_pending_audible_logins) > 10:
-            _pending_audible_logins.clear()
-
-        _pending_audible_logins[session_token] = {
-            "locale": locale,
-            "login_url": login_url,
-        }
-
-        logger.info("Audible login URL generated for locale=%s", locale)
-        return AudibleLoginUrlResponse(login_url=login_url, session_token=session_token)
-
+        import audible  # noqa: F401 — verify package is installed
     except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="audible package not installed",
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Audible login URL generation failed: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="audible package not installed")
+
+    # Generate CSRF session token
+    session_token = secrets.token_urlsafe(32)
+
+    # Threading events for coordination between login-url and authorize endpoints
+    login_url_ready = threading.Event()
+    response_url_ready = threading.Event()
+
+    session = {
+        "locale": locale,
+        "login_url": None,
+        "response_url": None,
+        "auth": None,
+        "error": None,
+        "login_url_ready": login_url_ready,
+        "response_url_ready": response_url_ready,
+        "created_at": time.monotonic(),
+    }
+
+    def _login_url_callback(url: str) -> str:
+        """Called by from_login_external with the Amazon login URL.
+
+        Captures the URL, signals the login-url endpoint, then blocks
+        until the authorize endpoint provides the response URL.
+        """
+        session["login_url"] = url
+        login_url_ready.set()
+
+        # Block until authorize endpoint provides the response URL (10 min timeout)
+        response_url_ready.wait(timeout=600)
+
+        if not session.get("response_url"):
+            raise RuntimeError("Audible authorization timed out — no response URL received")
+
+        return session["response_url"]
+
+    def _run_auth_flow():
+        """Background thread: runs the full from_login_external() flow."""
+        try:
+            import audible as _audible
+
+            auth = _audible.Authenticator.from_login_external(
+                locale=locale,
+                login_url_callback=_login_url_callback,
+            )
+            session["auth"] = auth
+            logger.info("Audible from_login_external completed successfully")
+        except Exception as e:
+            session["error"] = str(e)
+            logger.error("Audible auth thread failed: %s", type(e).__name__)
+        finally:
+            # Ensure login_url_ready is set even on early failure
+            login_url_ready.set()
+
+    # Start the auth flow in a background thread
+    thread = threading.Thread(target=_run_auth_flow, daemon=True, name="audible-auth")
+    thread.start()
+
+    # Wait for the login URL to be captured (up to 30 seconds)
+    login_url_ready.wait(timeout=30)
+
+    if not session["login_url"]:
+        error = session.get("error", "Unknown error")
+        logger.error("Failed to generate Audible login URL: %s", error)
         raise HTTPException(status_code=500, detail="Failed to generate login URL")
+
+    # Store session for the authorize endpoint
+    _audible_sessions[session_token] = session
+
+    logger.info("Audible login URL generated for locale=%s (thread waiting for response URL)", locale)
+    return AudibleLoginUrlResponse(login_url=session["login_url"], session_token=session_token)
 
 
 @router.post("/audible/authorize", response_model=AudibleStatus)
 def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
-    """Complete Audible authorization with the redirect URL from browser."""
+    """Complete Audible authorization with the redirect URL from browser.
+
+    Provides the response URL to the waiting background thread, which completes
+    the from_login_external() OAuth flow.
+    """
     # Validate session token (CSRF protection)
-    if not body.session_token or body.session_token not in _pending_audible_logins:
+    if not body.session_token or body.session_token not in _audible_sessions:
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired session. Please restart the Audible connection process.",
@@ -226,27 +293,36 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
         if parsed.scheme not in ("https", "http"):
             raise ValueError("Invalid URL scheme")
         if parsed.hostname not in AUDIBLE_ALLOWED_REDIRECT_DOMAINS:
-            raise ValueError(f"Unexpected redirect domain: {parsed.hostname}")
+            raise ValueError("Unexpected redirect domain")
     except Exception:
         raise HTTPException(
             status_code=400,
             detail="Invalid redirect URL. Expected an Amazon URL from the login redirect.",
         )
 
-    pending = _pending_audible_logins.pop(body.session_token)
-    locale = body.locale or pending.get("locale", "us")
+    session = _audible_sessions.pop(body.session_token)
+
+    # Provide the response URL to the waiting background thread
+    session["response_url"] = body.response_url.strip()
+    session["response_url_ready"].set()
+
+    # Wait for the background thread to complete the auth flow (up to 60 seconds)
+    for _ in range(120):
+        if session.get("auth") is not None or session.get("error") is not None:
+            break
+        time.sleep(0.5)
+
+    if session.get("error"):
+        logger.error("Audible authorization failed: %s", session["error"])
+        raise HTTPException(status_code=400, detail="Authorization failed. Please try again.")
+
+    if session.get("auth") is None:
+        raise HTTPException(status_code=408, detail="Authorization timed out. Please try again.")
+
+    auth = session["auth"]
+    locale = body.locale or session.get("locale", "us")
 
     try:
-        import audible
-
-        def return_response_url(url: str) -> str:
-            return body.response_url.strip()
-
-        auth = audible.Authenticator.from_login_external(
-            locale=locale,
-            login_url_callback=return_response_url,
-        )
-
         # Ensure /config directory exists
         os.makedirs(os.path.dirname(AUDIBLE_AUTH_FILE), exist_ok=True)
 
@@ -265,14 +341,9 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
 
         return AudibleStatus(connected=True, locale=locale)
 
-    except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="audible package not installed",
-        )
     except Exception as e:
-        logger.error("Audible authorization failed: %s", type(e).__name__)
-        raise HTTPException(status_code=400, detail="Authorization failed. Please try again.")
+        logger.error("Failed to save Audible auth file: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="Failed to save Audible credentials.")
 
 
 @router.delete("/audible/disconnect")
@@ -281,6 +352,8 @@ def audible_disconnect():
     if os.path.exists(AUDIBLE_AUTH_FILE):
         os.remove(AUDIBLE_AUTH_FILE)
         logger.info("Audible auth file removed (disconnected)")
-    # Clear any pending login sessions
-    _pending_audible_logins.clear()
+    # Clear any pending login sessions and signal waiting threads
+    for session in _audible_sessions.values():
+        session["response_url_ready"].set()
+    _audible_sessions.clear()
     return {"detail": "Audible disconnected"}
