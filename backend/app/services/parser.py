@@ -109,7 +109,7 @@ SUSPECT_AUTHOR_PATTERNS = [
     re.compile(r"^\d+$"),  # Pure numbers
     re.compile(r"^.{1,2}$"),  # Too short
     re.compile(r"^.{80,}$"),  # Too long
-    re.compile(r"(?:collection|complete|series|edition|publishing|books?$)", re.IGNORECASE),
+    re.compile(r"(?:collection|complete|series|edition|publishing|books?$|antholog|omnibus|compilation|boxset|box\s*set)", re.IGNORECASE),
     re.compile(r"\d+[a-z]?\s*$", re.IGNORECASE),  # Ends with numbers (e.g. "Warhammer 40k")
     re.compile(r"^(?:the|a|an)\s", re.IGNORECASE),  # Starts with article (e.g. "The Expanse")
 ]
@@ -562,6 +562,12 @@ def merge_with_tags(
         ga_real = _extract_ga_real_author(tag_author)
         if ga_real:
             tag_author = ga_real
+
+    # Reject tag author if it matches the title (mislabeled tags)
+    if tag_author and parsed.title and fuzzy_match(tag_author, parsed.title):
+        tag_author = None
+    if tag_author and tag_album and fuzzy_match(tag_author, tag_album):
+        tag_author = None
 
     # Use tag author if it looks like a real name (NOT GraphicAudio)
     if tag_author and not _is_graphic_audio_author(tag_author):
