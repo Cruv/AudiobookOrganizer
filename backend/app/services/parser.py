@@ -49,6 +49,12 @@ GRAPHIC_AUDIO_AUTHOR_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# GA author with real author embedded in brackets: "GraphicAudio [Author Name]"
+GRAPHIC_AUDIO_AUTHOR_BRACKET = re.compile(
+    r"^(?:GraphicAudio|Graphic\s*Audio(?:\s*LLC\.?)?)\s*\[(.+?)\]$",
+    re.IGNORECASE,
+)
+
 # Edition detection patterns for folder paths and names
 GRAPHIC_AUDIO_PATH_PATTERN = re.compile(
     r"Graphic\s*Audio", re.IGNORECASE
@@ -211,7 +217,27 @@ def _is_graphic_audio_author(author: str | None) -> bool:
     """Check if an author value is actually GraphicAudio (publisher, not a person)."""
     if not author:
         return False
-    return bool(GRAPHIC_AUDIO_AUTHOR_PATTERNS.match(author.strip()))
+    stripped = author.strip()
+    return bool(
+        GRAPHIC_AUDIO_AUTHOR_PATTERNS.match(stripped)
+        or GRAPHIC_AUDIO_AUTHOR_BRACKET.match(stripped)
+    )
+
+
+def _extract_ga_real_author(author: str) -> str | None:
+    """Extract real author from 'GraphicAudio [Author Name]' bracket patterns.
+
+    Returns cleaned author name or None if not a GA bracket pattern.
+    E.g. "GraphicAudio [William W. Johnstone / J.A. Johnstone]"
+         -> "William W. Johnstone, J.A. Johnstone"
+    """
+    match = GRAPHIC_AUDIO_AUTHOR_BRACKET.match(author.strip())
+    if match:
+        real = match.group(1).strip()
+        # Normalize slash separators to commas
+        real = re.sub(r"\s*/\s*", ", ", real)
+        return real
+    return None
 
 
 def detect_edition(
@@ -517,6 +543,12 @@ def merge_with_tags(
     if tag_album:
         tag_album = DRAMATIZED_PATTERN.sub("", tag_album).strip()
         tag_album = re.sub(r"\s+", " ", tag_album).strip() or None
+
+    # Extract real author from "GraphicAudio [Author Name]" bracket patterns
+    if tag_author:
+        ga_real = _extract_ga_real_author(tag_author)
+        if ga_real:
+            tag_author = ga_real
 
     # Use tag author if it looks like a real name (NOT GraphicAudio)
     if tag_author and not _is_graphic_audio_author(tag_author):
