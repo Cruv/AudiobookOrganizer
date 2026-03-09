@@ -71,16 +71,35 @@ DRAMATIZED_PATTERN = re.compile(
 # Multi-part indicators - NOT series positions:
 #   "(Part 2 of 2)", "Part 1 of 3" - with "Part" keyword (parens optional)
 #   "(3 of 3)" - parenthesized N of M (parens required when no "Part")
+#   "(Part 1 and 2)" - combined parts with "and"
+#   "(Parts 02)" - just "Parts NN" in parens
 MULTI_PART_PATTERN = re.compile(
-    r"\(\s*(?:Part\s+)?\d+\s+of\s+\d+\s*\)|Part\s+\d+\s+of\s+\d+",
+    r"\(\s*(?:Parts?\s+)?\d+\s+(?:of|and)\s+\d+\s*\)"
+    r"|Parts?\s+\d+\s+(?:of|and)\s+\d+"
+    r"|\(\s*Parts?\s+\d+\s*\)",
     re.IGNORECASE,
 )
 
 # Bracket series position: [04], [01], [1] - book number in brackets
 BRACKET_POSITION_PATTERN = re.compile(r"\[(\d{1,3})\]")
 
+# GA prefix in series names: "GA - Series Name" -> "Series Name"
+GA_SERIES_PREFIX = re.compile(r"^GA\s*[-–—]\s*", re.IGNORECASE)
+
+# Known publishers/producers that should not be narrators
+PUBLISHER_NARRATOR_PATTERNS = re.compile(
+    r"^(?:Black Library|Heavy Entertainment|Graphic Audio(?:\s*LLC\.?)?|"
+    r"GraphicAudio|Hachette|Penguin|Random House|HarperCollins|"
+    r"Macmillan|Simon\s*&\s*Schuster|Audible|Brilliance|"
+    r"Recorded Books|Tantor|Blackstone|BBC|Bolinda)$",
+    re.IGNORECASE,
+)
+
 # Leading track/book numbers: "01 ", "01. ", "01 - "
 LEADING_NUMBER_PATTERN = re.compile(r"^\d{1,3}(?:\s*[-–—.)\]]\s*|\s+)(?=[A-Z])")
+
+# Primarch-style prefix: "P01. Title" - extract position and strip
+PRIMARCH_PREFIX_PATTERN = re.compile(r"^P(\d{1,2})\.\s*", re.IGNORECASE)
 
 YEAR_PATTERN = re.compile(r"(?:^|\D)((?:19|20)\d{2})(?:\D|$)")
 
@@ -112,6 +131,12 @@ SUSPECT_AUTHOR_PATTERNS = [
     re.compile(r"(?:collection|complete|series|edition|publishing|books?$|antholog|omnibus|compilation|boxset|box\s*set)", re.IGNORECASE),
     re.compile(r"\d+[a-z]?\s*$", re.IGNORECASE),  # Ends with numbers (e.g. "Warhammer 40k")
     re.compile(r"^(?:the|a|an)\s", re.IGNORECASE),  # Starts with article (e.g. "The Expanse")
+    re.compile(r"^audiobooks?$", re.IGNORECASE),  # Root folder name
+    re.compile(
+        r"^(?:warhammer|horus\s+heresy|stormlight|cosmere|forgotten\s+realms|"
+        r"dragonlance|star\s+wars|star\s+trek|deathlands|outlanders)",
+        re.IGNORECASE,
+    ),  # Franchise names
 ]
 
 
@@ -124,13 +149,19 @@ def _clean_text(text: str) -> str:
     for pattern in JUNK_PATTERNS:
         cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
 
+    # Clean empty brackets/parens left after junk stripping
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\[\s*\]", "", cleaned)
+    cleaned = re.sub(r"\{\s*\}", "", cleaned)
+
     # Collapse whitespace
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 
 def _strip_leading_number(text: str) -> str:
-    """Strip leading track/book numbers like '01 ', '01. ', '01 - '."""
+    """Strip leading track/book numbers like '01 ', '01. ', '01 - ' and 'P01.'."""
+    text = PRIMARCH_PREFIX_PATTERN.sub("", text)
     return LEADING_NUMBER_PATTERN.sub("", text)
 
 
@@ -413,6 +444,16 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
             if bracket_pos:
                 pos = bracket_pos
 
+            # Resolve final title
+            final_title = _sanitize_name(title_clean) if title_clean else title
+
+            # If title is just a multi-part indicator ("Part 01", "Disc 2"),
+            # use the parent folder (series) as the real title
+            if not final_title or re.match(
+                r"^(?:Part|Pt|Disc|CD)\s*\d*$", final_title, re.IGNORECASE
+            ):
+                final_title = series
+
             # Lower confidence when author looks suspect (franchise, range, etc.)
             # so leaf-name strategies that correctly parse author can win
             confidence = 0.85
@@ -423,7 +464,7 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
                 author=author,
                 series=series,
                 series_position=pos,
-                title=_sanitize_name(title_clean) if title_clean else title,
+                title=final_title,
                 confidence=confidence,
             )
 
@@ -632,6 +673,35 @@ def merge_with_tags(
     if tag_narrator and not parsed.narrator:
         parsed.narrator = tag_narrator
 
+    # --- Post-merge cleanup ---
+
+    # Clean GA prefix from series: "GA - Series Name" -> "Series Name"
+    if parsed.series:
+        parsed.series = GA_SERIES_PREFIX.sub("", parsed.series).strip()
+        if not parsed.series:
+            parsed.series = None
+
+    # Dedup: if series matches author, clear series (folder repeated author as series)
+    if parsed.series and parsed.author and fuzzy_match(parsed.series, parsed.author):
+        parsed.series = None
+
+    # Strip author name from end of title: "Ashes of Man Christopher Ruocchio" -> "Ashes of Man"
+    if parsed.title and parsed.author and not _is_suspect_author(parsed.author):
+        author_words = parsed.author.lower().split()
+        if len(author_words) >= 2:
+            title_words = parsed.title.split()
+            if len(title_words) > len(author_words):
+                tail = [w.lower() for w in title_words[-len(author_words):]]
+                if tail == author_words:
+                    parsed.title = " ".join(title_words[:-len(author_words)]).strip()
+                    parsed.title = re.sub(r"[\s\-–—,]+$", "", parsed.title).strip()
+
+    # Clean empty parens/brackets that may remain in title
+    if parsed.title:
+        parsed.title = re.sub(r"\(\s*\)", "", parsed.title)
+        parsed.title = re.sub(r"\[\s*\]", "", parsed.title)
+        parsed.title = re.sub(r"\s+", " ", parsed.title).strip()
+
     return parsed
 
 
@@ -695,3 +765,58 @@ def auto_match_score(parsed: ParsedMetadata, result_title: str | None, result_au
         # No parsed author - partial credit if title matched
         score += 0.1
     return score
+
+
+def clean_narrator(narrator: str | None, edition: str | None = None) -> str | None:
+    """Clean and normalize narrator value.
+
+    - Rejects GraphicAudio/publishers as narrator
+    - Extracts real name from GA bracket patterns
+    - Strips role descriptions ("as Character") and credit suffixes
+    - Normalizes long GA cast lists to "Full Cast"
+    - Strips trailing punctuation
+    """
+    if not narrator:
+        return None
+
+    narrator = narrator.strip()
+    if not narrator:
+        return None
+
+    # Extract real name from "GraphicAudio [Author Name]" in narrator field
+    ga_real = _extract_ga_real_author(narrator)
+    if ga_real:
+        narrator = ga_real
+
+    # Reject GraphicAudio as narrator
+    if _is_graphic_audio_author(narrator):
+        return None
+
+    # Split comma-separated names and filter out publishers
+    parts = [n.strip() for n in narrator.split(",") if n.strip()]
+    clean_parts = []
+    for part in parts:
+        if not PUBLISHER_NARRATOR_PATTERNS.match(part):
+            clean_parts.append(part)
+    if not clean_parts:
+        return None
+
+    # Normalize long GA cast lists to "Full Cast"
+    if edition == "Graphic Audio":
+        if len(clean_parts) >= 4 or any("full cast" in p.lower() for p in clean_parts):
+            return "Full Cast"
+
+    narrator = ", ".join(clean_parts)
+
+    # Strip "as Character" role descriptions: "Richard Rohan as Ryan & Jak"
+    narrator = re.sub(r"\s+as\s+\w+(?:\s*[&,]\s*\w+)*\s*$", "", narrator)
+
+    # Strip "With performances by..." suffixes
+    narrator = re.sub(
+        r"\s*(?:With\s+performances?\s+by|[Pp]erformed\s+by).*$", "", narrator
+    )
+
+    # Strip trailing punctuation (semicolons, periods, commas)
+    narrator = re.sub(r"[;.,]+\s*$", "", narrator).strip()
+
+    return narrator if narrator else None

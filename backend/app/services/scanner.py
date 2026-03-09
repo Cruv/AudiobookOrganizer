@@ -15,7 +15,7 @@ from app.models.book import Book, BookFile
 from app.models.scan import Scan, ScannedFolder
 from app.models.settings import UserSetting
 from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_folder_tags, read_tags
-from app.services.parser import ParsedMetadata, auto_match_score, detect_edition, merge_with_tags, parse_folder_path
+from app.services.parser import ParsedMetadata, auto_match_score, clean_narrator, detect_edition, merge_with_tags, parse_folder_path
 
 MAX_DEPTH = 6
 AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 0.70
@@ -225,11 +225,8 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     if edition:
         parsed.edition = edition
 
-    # Normalize long GA narrator lists to "Full Cast"
-    if edition == "Graphic Audio" and parsed.narrator:
-        names = [n.strip() for n in parsed.narrator.split(",") if n.strip()]
-        if len(names) >= 4 or "Full Cast" in names:
-            parsed.narrator = "Full Cast"
+    # Clean and normalize narrator (reject publishers, strip junk, normalize GA casts)
+    parsed.narrator = clean_narrator(parsed.narrator, edition)
 
     # Create Book record
     book = Book(
