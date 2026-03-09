@@ -61,6 +61,10 @@ frontend/src/
 - **Edition output tokens**: `{Edition}` and `{EditionBracketed}` (wraps in `[]`) for output path patterns. Empty edition collapses cleanly
 - **GA author fix**: "GraphicAudio", "Graphic Audio LLC." etc. rejected as author in `merge_with_tags`, falls back to folder path author
 - **GA title cleaning**: `(GA)`, `(GraphicAudio)`, `[Dramatized Adaptation]` stripped from parsed titles
+- **Narrator normalization**: `clean_narrator()` function rejects publishers, strips role descriptions, normalizes GA cast lists, cleans trailing punctuation
+- **Series dedup**: Series matching author name auto-cleared; GA- prefix stripped from series
+- **Author-in-title stripping**: Author name appended to title end is auto-removed
+- **Franchise author detection**: "Warhammer", "Horus Heresy", "Stormlight", etc. caught by suspect patterns
 - Manual search modal (SearchModal) for custom metadata queries
 - Toast notifications on actions
 - Directory browser on Scan page
@@ -69,38 +73,55 @@ frontend/src/
 - Multi-file tag consensus (reads up to 10 files, most common values)
 - Scan logging visible in Docker logs
 - Organize (copy) and Purge (delete source) workflows
+- Browser HTTP cache fix: `cache: 'no-store'` on fetch + nginx `Cache-Control: no-store` for API
 
 ### Next Steps (Priority Order)
-1. **Re-scan and verify edition detection**: Run a new scan to verify GA books get `edition = "Graphic Audio"`, correct authors, and clean titles
-2. **Handle multi-part audiobooks**: 34 GA entries are split into Part 01, Part 02 etc. These should be grouped as a single book. All multi-part entries are GA books
-3. **Improve nested folder detection**: Some structures have franchise/series/subseries/book (e.g. Warhammer 40k -> Gaunt's Ghosts -> [01] First and Only). Parser takes parent[-3] as "author" which may be a franchise name
-4. **Tune parser for real-world patterns**: Series bracket notation `[01]`, Horus Heresy primarch novels with "P01." prefix, Deathlands numbering
-5. **Auto-lookup integration**: Verify auto-lookup triggers correctly during scan and test with real data
-6. **UI polish**: Pagination for large book lists, sort controls, filter by confidence/edition, bulk operations
+1. **Re-scan and verify all fixes**: Run a new scan to verify GA books get correct authors, clean titles, proper narrators, and series dedup
+2. **Handle multi-part audiobooks**: 34 GA entries are split into Part 01, Part 02 etc. These should be grouped as a single book. All multi-part entries are GA books. (Title fallback to parent folder is implemented, but books still create separate entries)
+3. **Auto-lookup integration**: Verify auto-lookup triggers correctly during scan and test with real data
+4. **UI polish**: Pagination for large book lists, sort controls, filter by confidence/edition, bulk operations
+5. **Scattered GA copies**: 9 GA copies of Mistborn/Stormlight live outside `/Graphic Audio Collection/` folder, creating duplicates
 
 ### Known Issues
-- "Warhammer 40k" and similar franchise names parsed as authors (suspect author detection catches trailing numbers but franchise detection could be smarter)
-- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all Graphic Audio)
+- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all Graphic Audio). Title now falls back to parent folder, but grouping not implemented
 - 9 "scattered" GA copies of Mistborn/Stormlight live outside `/Graphic Audio Collection/` folder, creating duplicates
 - Scan progress bar updates via polling (1.5s interval) - works but could use WebSocket for real-time updates
-- Existing DB data needs re-scan to populate new `edition` column (SQLAlchemy `create_all` will add nullable column automatically)
+- Existing DB data needs re-scan to populate new `edition` column and apply all parser fixes
 
 ### Export Data Analysis (254 books, scan 1)
 - **146 GA books** (57.5%) — detected by folder path containing "Graphic Audio" (100% coverage)
 - **96 had "GraphicAudio" as author** — now rejected, will fall back to folder-path author on re-scan
 - **12 had `(GA)`/`(GraphicAudio)` in title** — now cleaned by junk patterns
 - **6 Mistborn titles** exist in both GA and standard versions — now distinguishable by `{EditionBracketed}` in output path
+- **30+ had publisher as narrator** — now rejected by `clean_narrator()` (Black Library, Heavy Entertainment, etc.)
+- **19 had series=author duplication** — now auto-cleared by fuzzy_match dedup
+- **11 had empty () in titles** — now cleaned by `_clean_text` and post-merge cleanup
+- **12+ had author name in title** — now stripped by word-matching in `merge_with_tags`
 
-### Recent Changes
-- **Fixed "(Part X of Y)" title mangling**: Multi-part indicators like "(Part 2 of 2)" are now stripped before series position extraction, preventing orphaned "( of 2)" in titles
-- **Bracket position extraction**: `[04]`, `[01]` bracket notation now extracted as series position before junk cleaning removes all brackets. Bracket positions are preferred over text-extracted positions
-- **GA narrator normalization**: Cast lists with 4+ names (or containing "Full Cast") normalized to just "Full Cast" to prevent extremely long output paths
-- Added edition field (Book model, schemas, frontend types, export)
-- Added `detect_edition()` function in parser.py
-- Added `_is_graphic_audio_author()` to reject GA as author
-- Added `(GA)`, `(GraphicAudio)`, `[Dramatized Adaptation]` to JUNK_PATTERNS
-- Added `{Edition}` and `{EditionBracketed}` tokens to organizer + settings preview
-- Updated default patterns and presets to include `{EditionBracketed}`
+### Recent Changes (Session 2026-03-08)
+- **Batch parser fixes** (commit `782db59`):
+  - `clean_narrator()`: Rejects publishers (Black Library, Heavy Entertainment, etc.) as narrator, extracts real name from GA bracket patterns, strips "as Character" role descriptions, strips trailing `;` `.` punctuation, normalizes long GA cast lists to "Full Cast"
+  - `GA_SERIES_PREFIX`: Strips "GA - " prefix from series names
+  - Series=author dedup: Clears series when it fuzzy-matches author name
+  - Author-in-title stripping: Removes author name from end of title ("Ashes of Man Christopher Ruocchio" → "Ashes of Man")
+  - Part XX title fallback: When leaf folder is "Part 01" etc., uses parent folder as title
+  - `PRIMARCH_PREFIX_PATTERN`: Strips "P01.", "P02." prefix from titles
+  - Empty parens/brackets cleanup in `_clean_text` and post-merge
+  - Added "audiobooks" and franchise names (Warhammer, Horus Heresy, Stormlight, Cosmere, Forgotten Realms, Dragonlance, Star Wars, Star Trek, Deathlands, Outlanders) to `SUSPECT_AUTHOR_PATTERNS`
+  - Expanded `MULTI_PART_PATTERN` for "(Part 1 and 2)" and "(Parts 02)" variants
+  - `PUBLISHER_NARRATOR_PATTERNS` constant for narrator validation
+- **Earlier session fixes**:
+  - Fixed "(Part X of Y)" title mangling, bracket position extraction `[04]`
+  - GA narrator normalization (now superseded by `clean_narrator()`)
+  - Fixed stale ReviewPage (browser HTTP cache) via `cache: 'no-store'`
+  - GA bracket author extraction: "GraphicAudio [Author Name]" → real author
+  - Range pattern skip: "Book 1-7" no longer parsed as position 1
+  - Nested folder confidence lowered when author is suspect
+  - Title-is-author detection using word subset check
+  - "(N of M)" multi-part pattern (without "Part" keyword)
+  - Tag author vs title rejection (mislabeled tags)
+  - Added anthology/omnibus/boxset to suspect patterns
+  - Added edition field, `detect_edition()`, `{EditionBracketed}` token
 
 ## How to Continue Development
 When starting a new session, follow this process:
