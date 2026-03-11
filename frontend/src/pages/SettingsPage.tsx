@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Save, RotateCcw, Link, Unlink, ExternalLink, Loader2 } from 'lucide-react';
+import { Save, RotateCcw, Link, Unlink, ExternalLink, Loader2, Copy, Trash2, UserPlus } from 'lucide-react';
 import { useSettings, useUpdateSettings, usePreviewPattern } from '@/hooks/useSettings';
 import {
   getAudibleStatus,
   getAudibleLoginUrl,
   authorizeAudible,
   disconnectAudible,
+  createInvite,
+  getInvites,
+  deleteInvite,
 } from '@/api/client';
 import { useToast } from '@/components/Toast';
+import type { InviteItem } from '@/types';
 
 const PRESETS = {
   chaptarr: '{Author}/{Series}/{SeriesPosition} - {Title} ({Year}) {EditionBracketed}',
@@ -26,7 +30,11 @@ const TOKENS = [
   '{EditionBracketed}',
 ];
 
-export default function SettingsPage() {
+interface SettingsPageProps {
+  isAdmin?: boolean;
+}
+
+export default function SettingsPage({ isAdmin }: SettingsPageProps) {
   const { data: settings, isLoading } = useSettings();
   const updateSettings = useUpdateSettings();
 
@@ -43,6 +51,10 @@ export default function SettingsPage() {
   const [audibleResponseUrl, setAudibleResponseUrl] = useState('');
   const [audibleSessionToken, setAudibleSessionToken] = useState('');
   const [audibleLoading, setAudibleLoading] = useState(false);
+
+  // Invite state (admin only)
+  const [invites, setInvites] = useState<InviteItem[]>([]);
+  const [registrationOpen, setRegistrationOpen] = useState(true);
 
   const { data: preview } = usePreviewPattern(pattern);
 
@@ -64,6 +76,54 @@ export default function SettingsPage() {
       })
       .catch(() => {});
   }, []);
+
+  // Fetch registration setting and invites (admin only)
+  useEffect(() => {
+    if (!isAdmin) return;
+    getInvites().then(setInvites).catch(() => {});
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (settings) {
+      // registration_open is stored in UserSettings but exposed via auth status
+      // We'll read it from the settings endpoint if available
+    }
+  }, [settings]);
+
+  const handleCreateInvite = async () => {
+    try {
+      const invite = await createInvite();
+      setInvites((prev) => [invite, ...prev]);
+      const url = `${window.location.origin}?invite=${invite.token}`;
+      await navigator.clipboard.writeText(url);
+      toast.success('Invite link copied to clipboard');
+    } catch {
+      toast.error('Failed to create invite');
+    }
+  };
+
+  const handleDeleteInvite = async (id: number) => {
+    try {
+      await deleteInvite(id);
+      setInvites((prev) => prev.filter((i) => i.id !== id));
+      toast.success('Invite revoked');
+    } catch {
+      toast.error('Failed to revoke invite');
+    }
+  };
+
+  const handleToggleRegistration = async () => {
+    const newValue = !registrationOpen;
+    try {
+      await updateSettings.mutateAsync({
+        registration_open: newValue ? 'true' : 'false',
+      } as Record<string, string>);
+      setRegistrationOpen(newValue);
+      toast.success(newValue ? 'Registration opened' : 'Registration closed');
+    } catch {
+      toast.error('Failed to update registration setting');
+    }
+  };
 
   const handleSave = () => {
     updateSettings.mutate(
@@ -334,6 +394,17 @@ export default function SettingsPage() {
                           color: 'var(--color-text-muted)',
                         }}
                       />
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(audibleLoginUrl);
+                          toast.success('URL copied to clipboard');
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 rounded text-xs border"
+                        style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+                      >
+                        <Copy size={12} />
+                        Copy
+                      </button>
                       <a
                         href={audibleLoginUrl}
                         target="_blank"
@@ -378,6 +449,101 @@ export default function SettingsPage() {
             </>
           )}
         </div>
+
+        {/* Admin: User Management */}
+        {isAdmin && (
+          <div
+            className="rounded-lg border p-5"
+            style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+          >
+            <label className="text-sm font-medium">User Management</label>
+            <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
+              Control who can create accounts and manage invite links.
+            </p>
+
+            {/* Registration toggle */}
+            <div className="flex items-center justify-between mb-4 rounded p-3" style={{ backgroundColor: 'var(--color-bg)' }}>
+              <div>
+                <p className="text-sm font-medium">Open Registration</p>
+                <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  {registrationOpen ? 'Anyone can create an account' : 'Invite required to register'}
+                </p>
+              </div>
+              <button
+                onClick={handleToggleRegistration}
+                className="relative w-11 h-6 rounded-full transition-colors"
+                style={{ backgroundColor: registrationOpen ? 'var(--color-primary)' : 'var(--color-border)' }}
+              >
+                <span
+                  className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+                  style={{ transform: registrationOpen ? 'translateX(20px)' : 'translateX(0)' }}
+                />
+              </button>
+            </div>
+
+            {/* Generate invite */}
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={handleCreateInvite}
+                className="flex items-center gap-2 px-3 py-2 rounded text-sm font-medium text-white"
+                style={{ backgroundColor: 'var(--color-primary)' }}
+              >
+                <UserPlus size={14} />
+                Generate Invite Link
+              </button>
+            </div>
+
+            {/* Active invites */}
+            {invites.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium" style={{ color: 'var(--color-text-muted)' }}>
+                  Active Invites
+                </p>
+                {invites.map((invite) => (
+                  <div
+                    key={invite.id}
+                    className="flex items-center justify-between rounded p-2 text-xs"
+                    style={{ backgroundColor: 'var(--color-bg)' }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <span className="font-mono truncate block" style={{ color: 'var(--color-text-muted)' }}>
+                        ...{invite.token.slice(-12)}
+                      </span>
+                      <span style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>
+                        {invite.used ? 'Used' : `Expires ${new Date(invite.expires_at + 'Z').toLocaleDateString()}`}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {!invite.used && (
+                        <>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}?invite=${invite.token}`);
+                              toast.success('Invite link copied');
+                            }}
+                            className="p-1 rounded hover:bg-[var(--color-surface-hover)]"
+                            style={{ color: 'var(--color-text-muted)' }}
+                            title="Copy invite link"
+                          >
+                            <Copy size={12} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteInvite(invite.id)}
+                            className="p-1 rounded hover:bg-[var(--color-surface-hover)]"
+                            style={{ color: 'var(--color-danger)' }}
+                            title="Revoke invite"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Save */}
         <button

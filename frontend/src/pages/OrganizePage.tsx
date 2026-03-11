@@ -1,16 +1,19 @@
 import { useState } from 'react';
-import { FolderOutput, Loader2, Eye } from 'lucide-react';
+import { FolderOutput, Loader2, Eye, FolderCheck } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
 import type { OrganizePreviewItem } from '@/types';
 import ConfidenceBadge from '@/components/ConfidenceBadge';
 
 export default function OrganizePage() {
-  const { data: books, isLoading, refetch } = useBooks({
+  const { data: booksData, isLoading, refetch } = useBooks({
     confirmed: true,
     organize_status: 'pending',
+    page_size: 200,
   });
-  const { data: organizedBooks } = useBooks({ organize_status: 'copied' });
+  const books = booksData?.items;
+  const { data: organizedData } = useBooks({ organize_status: 'copied', page_size: 200 });
+  const organizedBooks = organizedData?.items;
 
   const [previews, setPreviews] = useState<OrganizePreviewItem[]>([]);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -172,11 +175,15 @@ export default function OrganizePage() {
 
         {books?.length === 0 && (
           <div
-            className="text-center py-12 rounded-lg border"
+            className="text-center py-16 rounded-lg border"
             style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
           >
-            <p style={{ color: 'var(--color-text-muted)' }}>
-              No confirmed books to organize. Go to Review to confirm books first.
+            <FolderCheck size={48} className="mx-auto mb-4" style={{ color: 'var(--color-text-muted)', opacity: 0.5 }} />
+            <p className="font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
+              No confirmed books to organize
+            </p>
+            <p className="text-sm" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
+              Go to the Review page to confirm books first.
             </p>
           </div>
         )}

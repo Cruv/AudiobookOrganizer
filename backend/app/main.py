@@ -1,8 +1,10 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 # Configure logging so scan messages appear in Docker logs
 logging.basicConfig(
@@ -13,9 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import engine
+from app.database import SessionLocal, engine
 from app.models import Base
-from app.routers import books, organize, scans, settings as settings_router
+from app.models.user import User, UserSession
+from app.routers import auth, books, organize, scans, settings as settings_router
 
 
 def _run_migrations(engine_instance):
@@ -66,7 +69,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Auth middleware — protects /api/* except /api/health and /api/auth/*
+AUTH_EXEMPT = {"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/register"}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # Only protect /api/* routes
+    if path.startswith("/api/") and path not in AUTH_EXEMPT:
+        db = SessionLocal()
+        try:
+            has_users = db.query(User).first() is not None
+            if has_users:
+                token = request.cookies.get("session_token")
+                if not token:
+                    return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+                session = (
+                    db.query(UserSession)
+                    .filter(
+                        UserSession.token == token,
+                        UserSession.expires_at > datetime.utcnow(),
+                    )
+                    .first()
+                )
+                if not session:
+                    return JSONResponse(status_code=401, content={"detail": "Session expired"})
+        finally:
+            db.close()
+    return await call_next(request)
+
+
 # API routes
+app.include_router(auth.router)
 app.include_router(scans.router)
 app.include_router(scans.browse_router)
 app.include_router(books.router)
@@ -77,7 +112,17 @@ app.include_router(settings_router.router)
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok"}
+    import sqlalchemy as sa
+    try:
+        db = SessionLocal()
+        db.execute(sa.text("SELECT 1"))
+        db.close()
+        return {"status": "ok", "database": "connected"}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "database": "unavailable"},
+        )
 
 
 # Serve static frontend files in production

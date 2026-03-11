@@ -91,3 +91,11 @@ class ApplyLookup(BaseModel):
 
 class BookSearch(BaseModel):
     query: str
+
+
+class PaginatedBooksResponse(BaseModel):
+    items: list[BookResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int

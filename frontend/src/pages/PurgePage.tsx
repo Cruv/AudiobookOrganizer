@@ -2,13 +2,18 @@ import { useState } from 'react';
 import { Loader2, ShieldCheck, Trash2 } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import { useToast } from '@/components/Toast';
 import type { PurgeVerifyItem } from '@/types';
 
 export default function PurgePage() {
-  const { data: books, isLoading, refetch } = useBooks({
+  const { data: booksData, isLoading, refetch } = useBooks({
     organize_status: 'copied',
     purge_status: 'not_purged',
+    page_size: 200,
   });
+  const books = booksData?.items;
+  const toast = useToast();
 
   const [verifications, setVerifications] = useState<Map<number, PurgeVerifyItem>>(new Map());
   const [isVerifying, setIsVerifying] = useState(false);
@@ -48,9 +53,12 @@ export default function PurgePage() {
     setShowConfirm(false);
     try {
       await api.executePurge(ids);
+      toast.success(`Purged original files for ${ids.length} books`);
       setSelected(new Set());
       setVerifications(new Map());
       refetch();
+    } catch {
+      toast.error('Failed to purge files');
     } finally {
       setIsPurging(false);
     }
@@ -168,38 +176,15 @@ export default function PurgePage() {
         )}
       </div>
 
-      {/* Confirm dialog */}
       {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div
-            className="w-full max-w-md rounded-lg border p-6"
-            style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-          >
-            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--color-danger)' }}>
-              Confirm Purge
-            </h3>
-            <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
-              This will permanently delete the original files for {verifiedCount} verified books.
-              This action cannot be undone.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowConfirm(false)}
-                className="px-4 py-2 rounded text-sm border"
-                style={{ borderColor: 'var(--color-border)' }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handlePurge}
-                className="px-4 py-2 rounded text-sm font-medium text-white"
-                style={{ backgroundColor: 'var(--color-danger)' }}
-              >
-                Delete Original Files
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          title="Confirm Purge"
+          message={`This will permanently delete the original files for ${verifiedCount} verified books. This action cannot be undone.`}
+          confirmLabel="Delete Original Files"
+          confirmColor="var(--color-danger)"
+          onConfirm={handlePurge}
+          onCancel={() => setShowConfirm(false)}
+        />
       )}
     </div>
   );

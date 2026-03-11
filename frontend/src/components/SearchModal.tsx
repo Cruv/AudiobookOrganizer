@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Loader2, Search, X } from 'lucide-react';
 import type { Book, LookupResult } from '@/types';
 import { useSearchBook, useApplyLookup } from '@/hooks/useBooks';
@@ -10,6 +10,14 @@ interface Props {
 }
 
 export default function SearchModal({ book, onClose }: Props) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const defaultQuery = [book.title, book.author].filter(Boolean).join(' ');
   const [query, setQuery] = useState(defaultQuery);
   const [results, setResults] = useState<LookupResult[] | null>(null);

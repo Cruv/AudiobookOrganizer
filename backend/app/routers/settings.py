@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
-SETTINGS_KEYS = ["output_pattern", "output_root", "google_books_api_key", "audible_locale"]
+SETTINGS_KEYS = ["output_pattern", "output_root", "google_books_api_key", "audible_locale", "registration_open"]
 
 AUDIBLE_AUTH_FILE = "/app/data/audible_auth.json"
 

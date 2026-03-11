@@ -3,12 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { FolderOpen, FolderSearch, Loader2, Trash2 } from 'lucide-react';
 import { useScans, useScan, useCreateScan, useDeleteScan } from '@/hooks/useScans';
 import DirectoryBrowser from '@/components/DirectoryBrowser';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import { useToast } from '@/components/Toast';
 
 export default function ScanPage() {
   const [sourceDir, setSourceDir] = useState('');
   const [activeScanId, setActiveScanId] = useState<number | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
+  const [deletingScanId, setDeletingScanId] = useState<number | null>(null);
   const navigate = useNavigate();
+  const toast = useToast();
 
   const { data: scans } = useScans();
   const { data: activeScan } = useScan(activeScanId);
@@ -164,7 +168,7 @@ export default function ScanPage() {
                     </button>
                   )}
                   <button
-                    onClick={() => deleteScan.mutate(scan.id)}
+                    onClick={() => setDeletingScanId(scan.id)}
                     className="p-1.5 rounded hover:bg-[var(--color-surface-hover)]"
                     style={{ color: 'var(--color-text-muted)' }}
                   >
@@ -175,6 +179,22 @@ export default function ScanPage() {
             ))}
           </div>
         </div>
+      )}
+      {deletingScanId !== null && (
+        <ConfirmDialog
+          title="Delete Scan"
+          message="This will permanently delete this scan and all associated book data. This action cannot be undone."
+          confirmLabel="Delete Scan"
+          confirmColor="var(--color-danger)"
+          onConfirm={() => {
+            deleteScan.mutate(deletingScanId, {
+              onSuccess: () => toast.success('Scan deleted'),
+              onError: () => toast.error('Failed to delete scan'),
+            });
+            setDeletingScanId(null);
+          }}
+          onCancel={() => setDeletingScanId(null)}
+        />
       )}
     </div>
   );

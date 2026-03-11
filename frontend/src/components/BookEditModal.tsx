@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import type { Book } from '@/types';
 
@@ -17,6 +17,14 @@ interface Props {
 }
 
 export default function BookEditModal({ book, onSave, onClose }: Props) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const [title, setTitle] = useState(book.title || '');
   const [author, setAuthor] = useState(book.author || '');
   const [series, setSeries] = useState(book.series || '');

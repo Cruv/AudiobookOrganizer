@@ -14,6 +14,7 @@ from app.schemas.book import (
     BookSearch,
     BookUpdate,
     LookupResponse,
+    PaginatedBooksResponse,
 )
 from app.services.lookup import lookup_book
 from app.services.organizer import build_output_path
@@ -39,16 +40,22 @@ def _attach_book_info(book: Book, resp: BookResponse, db: Session) -> None:
     resp.projected_path = build_output_path(book, pattern, root)
 
 
-@router.get("", response_model=list[BookResponse])
+@router.get("", response_model=PaginatedBooksResponse)
 def list_books(
     scan_id: int | None = Query(None),
     confirmed: bool | None = Query(None),
     organize_status: str | None = Query(None),
     purge_status: str | None = Query(None),
     sort: str = Query("confidence"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    edition: str | None = Query(None),
+    min_confidence: float | None = Query(None),
+    max_confidence: float | None = Query(None),
+    search: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    """List books with optional filtering."""
+    """List books with optional filtering and pagination."""
     query = db.query(Book).outerjoin(ScannedFolder).options(joinedload(Book.scanned_folder))
 
     if scan_id is not None:
@@ -59,6 +66,17 @@ def list_books(
         query = query.filter(Book.organize_status == organize_status)
     if purge_status is not None:
         query = query.filter(Book.purge_status == purge_status)
+    if edition is not None:
+        query = query.filter(Book.edition == edition)
+    if min_confidence is not None:
+        query = query.filter(Book.confidence >= min_confidence)
+    if max_confidence is not None:
+        query = query.filter(Book.confidence <= max_confidence)
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            (Book.title.ilike(search_term)) | (Book.author.ilike(search_term))
+        )
 
     if sort == "confidence":
         query = query.order_by(Book.confidence.asc())
@@ -71,7 +89,8 @@ def list_books(
     else:
         query = query.order_by(Book.created_at.desc())
 
-    books = query.all()
+    total = query.count()
+    books = query.offset((page - 1) * page_size).limit(page_size).all()
 
     results = []
     for book in books:
@@ -79,7 +98,13 @@ def list_books(
         _attach_book_info(book, resp, db)
         results.append(resp)
 
-    return results
+    return PaginatedBooksResponse(
+        items=results,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=max(1, (total + page_size - 1) // page_size),
+    )
 
 
 @router.get("/export")

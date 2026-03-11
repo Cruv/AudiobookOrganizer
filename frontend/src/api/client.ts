@@ -1,9 +1,12 @@
 import type {
+  AuthStatus,
   Book,
   BookDetail,
   BrowseResult,
+  InviteItem,
   LookupResult,
   OrganizePreviewItem,
+  PaginatedBooks,
   PatternPreview,
   PurgeResultItem,
   PurgeVerifyItem,
@@ -52,6 +55,12 @@ export const getBooks = (params?: {
   organize_status?: string;
   purge_status?: string;
   sort?: string;
+  page?: number;
+  page_size?: number;
+  edition?: string;
+  min_confidence?: number;
+  max_confidence?: number;
+  search?: string;
 }) => {
   const searchParams = new URLSearchParams();
   if (params?.scan_id != null) searchParams.set('scan_id', String(params.scan_id));
@@ -59,8 +68,14 @@ export const getBooks = (params?: {
   if (params?.organize_status) searchParams.set('organize_status', params.organize_status);
   if (params?.purge_status) searchParams.set('purge_status', params.purge_status);
   if (params?.sort) searchParams.set('sort', params.sort);
+  if (params?.page != null) searchParams.set('page', String(params.page));
+  if (params?.page_size != null) searchParams.set('page_size', String(params.page_size));
+  if (params?.edition) searchParams.set('edition', params.edition);
+  if (params?.min_confidence != null) searchParams.set('min_confidence', String(params.min_confidence));
+  if (params?.max_confidence != null) searchParams.set('max_confidence', String(params.max_confidence));
+  if (params?.search) searchParams.set('search', params.search);
   const qs = searchParams.toString();
-  return request<Book[]>(`/books${qs ? `?${qs}` : ''}`);
+  return request<PaginatedBooks>(`/books${qs ? `?${qs}` : ''}`);
 };
 
 export const getBook = (id: number) => request<BookDetail>(`/books/${id}`);
@@ -185,3 +200,29 @@ export const disconnectAudible = () =>
   request<{ detail: string }>('/settings/audible/disconnect', {
     method: 'DELETE',
   });
+
+// Auth
+export const getAuthStatus = () => request<AuthStatus>('/auth/status');
+
+export const login = (username: string, password: string) =>
+  request<{ detail: string; username: string; is_admin: boolean }>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+
+export const register = (username: string, password: string, invite_token?: string) =>
+  request<{ detail: string; username: string; is_admin: boolean }>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ username, password, invite_token: invite_token || null }),
+  });
+
+export const logout = () =>
+  request<{ detail: string }>('/auth/logout', { method: 'POST' });
+
+export const createInvite = () =>
+  request<InviteItem>('/auth/invites', { method: 'POST' });
+
+export const getInvites = () => request<InviteItem[]>('/auth/invites');
+
+export const deleteInvite = (id: number) =>
+  request<{ detail: string }>(`/auth/invites/${id}`, { method: 'DELETE' });

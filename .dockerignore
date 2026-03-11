@@ -1,0 +1,16 @@
+.git
+.gitignore
+.github
+*.md
+docker-compose.yml
+node_modules
+__pycache__
+*.pyc
+*.egg-info
+.env
+.vscode
+.idea
+.claude
+frontend/node_modules
+frontend/dist
+backend/tests

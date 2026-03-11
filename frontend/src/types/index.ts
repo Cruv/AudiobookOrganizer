@@ -127,3 +127,27 @@ export interface BrowseResult {
   parent_path: string | null;
   directories: DirectoryEntry[];
 }
+
+export interface PaginatedBooks {
+  items: Book[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export interface AuthStatus {
+  logged_in: boolean;
+  username: string | null;
+  is_admin: boolean;
+  registration_open: boolean;
+  has_users: boolean;
+}
+
+export interface InviteItem {
+  id: number;
+  token: string;
+  created_at: string;
+  expires_at: string;
+  used: boolean;
+}

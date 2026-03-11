@@ -1,6 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Check, Edit3, Loader2, Search, CheckCheck, Download } from 'lucide-react';
+import {
+  Check,
+  Edit3,
+  Loader2,
+  Search,
+  CheckCheck,
+  Download,
+  FolderSearch,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 import {
   useBooks,
   useConfirmBook,
@@ -15,12 +25,45 @@ import SearchModal from '@/components/SearchModal';
 import { useToast } from '@/components/Toast';
 import type { Book } from '@/types';
 
+const PAGE_SIZE = 50;
+
 export default function ReviewPage() {
   const [searchParams] = useSearchParams();
   const scanId = searchParams.get('scan_id') ? Number(searchParams.get('scan_id')) : undefined;
 
   const [sort, setSort] = useState('confidence');
-  const { data: books, isLoading } = useBooks({ scan_id: scanId, sort });
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [filterEdition, setFilterEdition] = useState('');
+  const [filterConfirmed, setFilterConfirmed] = useState('');
+  const [filterConfidence, setFilterConfidence] = useState('');
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchInput), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // Reset page when filters change
+  const resetPage = useCallback(() => setPage(1), []);
+  useEffect(() => { resetPage(); }, [debouncedSearch, filterEdition, filterConfirmed, filterConfidence, sort, resetPage]);
+
+  const { data: booksData, isLoading } = useBooks({
+    scan_id: scanId,
+    sort,
+    page,
+    page_size: PAGE_SIZE,
+    search: debouncedSearch || undefined,
+    edition: filterEdition || undefined,
+    confirmed: filterConfirmed === '' ? undefined : filterConfirmed === 'true',
+    min_confidence: filterConfidence === 'high' ? 0.8 : filterConfidence === 'medium' ? 0.5 : filterConfidence === 'low' ? 0 : undefined,
+    max_confidence: filterConfidence === 'low' ? 0.5 : filterConfidence === 'medium' ? 0.8 : undefined,
+  });
+  const books = booksData?.items;
+  const totalPages = booksData?.total_pages || 1;
+  const totalCount = booksData?.total || 0;
+
   const confirmBook = useConfirmBook();
   const confirmBatch = useConfirmBatch();
   const updateBook = useUpdateBook();
@@ -55,7 +98,7 @@ export default function ReviewPage() {
     );
   };
 
-  if (isLoading) {
+  if (isLoading && !books) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
@@ -64,32 +107,16 @@ export default function ReviewPage() {
   }
 
   const confirmedCount = books?.filter((b) => b.is_confirmed).length || 0;
-  const totalCount = books?.length || 0;
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">Review Books</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>
-            {confirmedCount} / {totalCount} confirmed
-            {scanId && ` (Scan #${scanId})`}
+            {totalCount} books{confirmedCount > 0 && ` (${confirmedCount} confirmed on this page)`}
+            {scanId && ` · Scan #${scanId}`}
           </p>
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value)}
-            className="mt-2 rounded border px-2 py-1.5 text-sm outline-none"
-            style={{
-              backgroundColor: 'var(--color-surface)',
-              borderColor: 'var(--color-border)',
-              color: 'var(--color-text)',
-            }}
-          >
-            <option value="confidence">Confidence (Low first)</option>
-            <option value="confidence_desc">Confidence (High first)</option>
-            <option value="title">Title (A-Z)</option>
-            <option value="author">Author (A-Z)</option>
-          </select>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -108,9 +135,88 @@ export default function ReviewPage() {
             style={{ backgroundColor: 'var(--color-success)' }}
           >
             <CheckCheck size={16} />
-            Confirm All High-Confidence
+            Confirm High
           </button>
         </div>
+      </div>
+
+      {/* Filter bar */}
+      <div
+        className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 mb-4"
+        style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+      >
+        <div className="flex-1 min-w-[200px]">
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search title or author..."
+            className="w-full rounded border px-3 py-1.5 text-sm outline-none"
+            style={{
+              backgroundColor: 'var(--color-bg)',
+              borderColor: 'var(--color-border)',
+              color: 'var(--color-text)',
+            }}
+          />
+        </div>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          className="rounded border px-2 py-1.5 text-sm outline-none"
+          style={{
+            backgroundColor: 'var(--color-bg)',
+            borderColor: 'var(--color-border)',
+            color: 'var(--color-text)',
+          }}
+        >
+          <option value="confidence">Confidence (Low)</option>
+          <option value="confidence_desc">Confidence (High)</option>
+          <option value="title">Title (A-Z)</option>
+          <option value="author">Author (A-Z)</option>
+        </select>
+        <select
+          value={filterConfidence}
+          onChange={(e) => setFilterConfidence(e.target.value)}
+          className="rounded border px-2 py-1.5 text-sm outline-none"
+          style={{
+            backgroundColor: 'var(--color-bg)',
+            borderColor: 'var(--color-border)',
+            color: 'var(--color-text)',
+          }}
+        >
+          <option value="">All Confidence</option>
+          <option value="high">High (80%+)</option>
+          <option value="medium">Medium (50-80%)</option>
+          <option value="low">Low (&lt;50%)</option>
+        </select>
+        <select
+          value={filterEdition}
+          onChange={(e) => setFilterEdition(e.target.value)}
+          className="rounded border px-2 py-1.5 text-sm outline-none"
+          style={{
+            backgroundColor: 'var(--color-bg)',
+            borderColor: 'var(--color-border)',
+            color: 'var(--color-text)',
+          }}
+        >
+          <option value="">All Editions</option>
+          <option value="Graphic Audio">Graphic Audio</option>
+          <option value="standard">Standard</option>
+        </select>
+        <select
+          value={filterConfirmed}
+          onChange={(e) => setFilterConfirmed(e.target.value)}
+          className="rounded border px-2 py-1.5 text-sm outline-none"
+          style={{
+            backgroundColor: 'var(--color-bg)',
+            borderColor: 'var(--color-border)',
+            color: 'var(--color-text)',
+          }}
+        >
+          <option value="">All Status</option>
+          <option value="true">Confirmed</option>
+          <option value="false">Unconfirmed</option>
+        </select>
       </div>
 
       {/* Book list */}
@@ -126,7 +232,6 @@ export default function ReviewPage() {
             }}
           >
             <div className="flex items-center gap-4">
-              {/* Metadata */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-medium text-sm truncate">
@@ -155,7 +260,6 @@ export default function ReviewPage() {
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 <button
                   onClick={() => setSearchingBook(book)}
@@ -189,7 +293,6 @@ export default function ReviewPage() {
               </div>
             </div>
 
-            {/* Before/After paths */}
             <div className="mt-2 text-xs font-mono space-y-0.5">
               <div className="flex gap-2 truncate">
                 <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>Source:</span>
@@ -209,17 +312,51 @@ export default function ReviewPage() {
 
         {books?.length === 0 && (
           <div
-            className="text-center py-12 rounded-lg border"
+            className="text-center py-16 rounded-lg border"
             style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
           >
-            <p style={{ color: 'var(--color-text-muted)' }}>
-              No books found. Start by scanning a directory.
+            <FolderSearch size={48} className="mx-auto mb-4" style={{ color: 'var(--color-text-muted)', opacity: 0.5 }} />
+            <p className="font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
+              {debouncedSearch || filterEdition || filterConfirmed || filterConfidence
+                ? 'No books match your filters'
+                : 'No books found'}
+            </p>
+            <p className="text-sm" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
+              {debouncedSearch || filterEdition || filterConfirmed || filterConfidence
+                ? 'Try adjusting your search or filter criteria.'
+                : 'Start by scanning a directory on the Scan page.'}
             </p>
           </div>
         )}
       </div>
 
-      {/* Edit modal */}
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-4 mt-6">
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="flex items-center gap-1 px-3 py-2 rounded text-sm border disabled:opacity-30"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+          >
+            <ChevronLeft size={16} />
+            Previous
+          </button>
+          <span className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
+            Page {page} of {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="flex items-center gap-1 px-3 py-2 rounded text-sm border disabled:opacity-30"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+          >
+            Next
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
+
       {editingBook && (
         <BookEditModal
           book={editingBook}
@@ -239,7 +376,6 @@ export default function ReviewPage() {
         />
       )}
 
-      {/* Search modal */}
       {searchingBook && (
         <SearchModal
           book={searchingBook}

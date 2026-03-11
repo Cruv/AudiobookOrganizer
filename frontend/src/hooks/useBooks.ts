@@ -7,11 +7,17 @@ export function useBooks(params?: {
   organize_status?: string;
   purge_status?: string;
   sort?: string;
+  page?: number;
+  page_size?: number;
+  edition?: string;
+  min_confidence?: number;
+  max_confidence?: number;
+  search?: string;
 }) {
   return useQuery({
     queryKey: ['books', params],
     queryFn: () => api.getBooks(params),
-    staleTime: 0, // Always refetch on mount — book data changes after scans/lookups
+    staleTime: 0,
   });
 }
 
