@@ -12,14 +12,15 @@ Web-based audiobook organizer that scans directories, auto-identifies metadata (
 ## Key Directories
 ```
 backend/app/
-  main.py              # FastAPI app, logging config, static mount
+  main.py              # FastAPI app, logging config, static mount, auth middleware
   database.py          # SQLAlchemy engine + SessionLocal
   config.py            # Settings from env vars
-  models/              # SQLAlchemy models (Book, BookFile, Scan, ScannedFolder, UserSetting, LookupCache)
+  models/              # SQLAlchemy models (Book, BookFile, Scan, ScannedFolder, UserSetting, LookupCache, User, UserSession, Invite)
   schemas/             # Pydantic schemas
   routers/
+    auth.py            # Register, login, logout, invites
     scans.py           # POST /api/scans, browse endpoint, _run_scan_with_id background task
-    books.py           # CRUD, lookup, search, apply-lookup, export, confirm
+    books.py           # CRUD, lookup, search, apply-lookup, export, confirm, paginated
     organize.py        # Preview + execute organize, purge
     settings.py        # User settings CRUD
   services/
@@ -29,8 +30,8 @@ backend/app/
     lookup.py          # Audible, Google Books, OpenLibrary, iTunes APIs + caching + dedup
     organizer.py       # build_output_path, organize_book, token pattern system
 frontend/src/
-  pages/               # ScanPage, ReviewPage, OrganizePage, PurgePage, SettingsPage
-  components/          # BookEditModal, SearchModal, DirectoryBrowser, Toast, etc.
+  pages/               # ScanPage, ReviewPage, OrganizePage, PurgePage, SettingsPage, LoginPage, RegisterPage
+  components/          # BookEditModal, SearchModal, DirectoryBrowser, Toast, ConfirmDialog, ErrorBoundary, etc.
   hooks/               # TanStack Query hooks
   api/client.ts        # API client functions
   types/index.ts       # TypeScript interfaces
@@ -53,14 +54,16 @@ frontend/src/
 6. **Auto-lookup** (`scanner.py`): ALL books get online lookup via Audible + iTunes + Google Books + OpenLibrary (threshold = 1.0)
 7. **Auto-apply** (`scanner.py`): Best lookup result applied if auto_match_score >= 0.85. Narrator applied from lookup results
 
-## Current Status (Last Updated: 2026-03-09)
+## Current Status (Last Updated: 2026-03-10)
 
 ### What's Working
 - Full scan pipeline: directory walk → folder parse → tag read → online lookup → DB records
-- **Review page**: Confidence badges, source/output path preview, edit modal, **sort dropdown** (title, author, confidence)
+- **Authentication**: Username/password with session cookies (HttpOnly), first user = admin, open registration with toggle, invite system for closed registration
+- **Review page**: Confidence badges, source/output path preview, edit modal, sort dropdown, **search**, **filter by confidence/edition/confirmed**, **server-side pagination**
+- **Server-side pagination**: Books endpoint returns `{items, total, page, page_size, total_pages}`
 - **Edition detection**: Graphic Audio auto-detected from folder path, folder name `(GA)`, tag_author "GraphicAudio", and `[Dramatized Adaptation]` tags
 - **4 Lookup Providers**: Audible (0.92), iTunes (0.90), Google Books (0.85), OpenLibrary (0.80) — all with 30-day caching
-- **Audible integration**: Uses `audible` Python package with external browser auth flow. Settings page has Connect/Disconnect UI with marketplace selector. Auth persisted to `/config/audible_auth.json`
+- **Audible integration**: Uses `audible` Python package with external browser auth flow. Settings page has Connect/Disconnect UI with marketplace selector. Auth persisted to `/app/data/audible_auth.json`
 - **Online lookup for ALL books**: Threshold raised to 1.0 — every book gets searched online during scan. 0.3s rate limiting between lookups. Narrator applied from online results
 - **Narrator from Audible**: LookupResult now includes narrator field. Audible uniquely provides narrator in search results. Applied during auto-lookup when book has no narrator
 - **GA author fix**: "GraphicAudio" rejected as author, falls back to folder path author
@@ -75,12 +78,21 @@ frontend/src/
 - Multi-file tag consensus (reads up to 10 files)
 - Organize (copy) and Purge (delete source) workflows
 - Browser HTTP cache fix: `cache: 'no-store'` on fetch + nginx
+- **Error boundaries**: Each route wrapped in ErrorBoundary to prevent full-app crashes
+- **ConfirmDialog**: Reusable modal with Escape key, used on ScanPage (delete) and PurgePage (purge)
+- **Mobile responsive sidebar**: Hamburger menu on small screens with overlay
+- **Escape key**: Closes all modals (BookEditModal, SearchModal, DirectoryBrowser, ConfirmDialog)
+- **SourceBadge colors**: audible, itunes, auto:audible, auto:itunes, auto:google_books, auto:openlibrary
+- **Improved empty states**: Icons and guidance text on ReviewPage, OrganizePage
+- **Invite management**: Admin can generate/revoke invite links, copy to clipboard
+- **.dockerignore**: Optimizes Docker build context
+- **Enhanced health check**: DB connectivity verification, returns 503 if DB unavailable
 
 ### Next Steps (Priority Order)
 1. **Re-scan and verify all fixes**: Run a new scan to verify all parser fixes, online lookup, and Audible integration
-2. **Test Audible auth flow**: Connect Audible in Settings page, verify search results during scan
-3. **Handle multi-part audiobooks**: 34 GA entries split into Part 01, Part 02. Title falls back to parent but books still create separate entries. Need grouping logic
-4. **UI polish**: Pagination for large book lists, filter by confidence/edition, bulk operations
+2. **Test auth flow end-to-end**: First user registration, login/logout, invite generation, closed registration
+3. **Test Audible auth flow**: Connect Audible in Settings page, verify search results during scan
+4. **Handle multi-part audiobooks**: 34 GA entries split into Part 01, Part 02. Title falls back to parent but books still create separate entries. Need grouping logic
 5. **Scattered GA copies**: 9 GA copies of Mistborn/Stormlight outside `/Graphic Audio Collection/`
 
 ### Known Issues
@@ -100,7 +112,26 @@ frontend/src/
 - **11 had empty () in titles** — now cleaned by `_clean_text` and post-merge cleanup
 - **12+ had author name in title** — now stripped by word-matching in `merge_with_tags`
 
-### Recent Changes (Session 2026-03-09)
+### Recent Changes (Session 2026-03-10)
+- **Production polish** (commit `47176dd`):
+  - **Authentication system**: User/UserSession/Invite models with PBKDF2 password hashing. Auth middleware on all `/api/*` routes (exempt: health, auth endpoints). Session cookies (HttpOnly, 7-day expiry). First registered user becomes admin. Open registration with admin toggle. Invite system (7-day expiry tokens) for closed registration
+  - **Auth frontend**: LoginPage, RegisterPage, AuthGate in App.tsx. Sidebar shows username + logout. SettingsPage has invite management (generate, list, revoke) and registration toggle
+  - **Server-side pagination**: `PaginatedBooksResponse` schema with `{items, total, page, page_size, total_pages}`. Books endpoint accepts `page`, `page_size`, `edition`, `min_confidence`, `max_confidence`, `search` params
+  - **ReviewPage rewrite**: Search input (debounced 300ms), filter dropdowns (sort, confidence, edition, confirmed), pagination controls (Previous/Next)
+  - **OrganizePage + PurgePage**: Adapted for paginated response (`booksData?.items`), `page_size: 200`
+  - **ConfirmDialog component**: Reusable modal with Escape key, AlertTriangle icon
+  - **ErrorBoundary component**: Wraps each route, shows error + "Try Again" button
+  - **Mobile sidebar**: Hamburger menu on `md:` breakpoint, overlay with slide-in nav
+  - **Escape key**: Added to BookEditModal, SearchModal, DirectoryBrowser
+  - **SourceBadge**: Added audible/itunes/auto variant colors, strips `auto:` prefix for display
+  - **ScanPage**: Confirm dialog before deleting scans with toast feedback
+  - **PurgePage**: Replaced inline dialog with ConfirmDialog, added toasts on purge success/error
+  - **Empty states**: Icons (FolderSearch, FolderCheck) + guidance text on ReviewPage, OrganizePage
+  - **Health check**: DB connectivity check (`SELECT 1`), returns 503 on failure
+  - **.dockerignore**: Excludes .git, node_modules, __pycache__, .env, IDE dirs
+  - **Audible URL copy button**: Settings page has Copy button next to Open link
+
+### Previous Changes (Session 2026-03-09)
 - **Security hardening** (commit `7a27f6f`):
   - Audible auth file: `os.chmod(AUDIBLE_AUTH_FILE, 0o600)` after save — only process owner can read
   - CSRF protection: `session_token` (secrets.token_urlsafe) ties `login-url` → `authorize` requests
