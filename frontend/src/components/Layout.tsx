@@ -93,7 +93,7 @@ export default function Layout({ username, isAdmin }: Props) {
           </div>
         )}
         <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)', opacity: 0.5 }}>
-          v0.1
+          v1.0.0
         </p>
       </div>
     </>
