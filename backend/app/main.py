@@ -11,14 +11,15 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s: %(message)s",
 )
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from app.config import settings
-from app.database import SessionLocal, engine
-from app.models import Base
-from app.models.user import User, UserSession
-from app.routers import auth, books, organize, scans, settings as settings_router
+from app.config import settings  # noqa: E402
+from app.database import SessionLocal, engine  # noqa: E402
+from app.models import Base  # noqa: E402
+from app.models.user import User, UserSession  # noqa: E402
+from app.routers import auth, books, organize, scans  # noqa: E402
+from app.routers import settings as settings_router  # noqa: E402
 
 
 def _run_migrations(engine_instance):

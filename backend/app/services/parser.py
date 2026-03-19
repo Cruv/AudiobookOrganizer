@@ -5,7 +5,7 @@ title, author, series, series position, and year from messy folder names.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

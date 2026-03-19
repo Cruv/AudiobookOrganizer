@@ -20,7 +20,6 @@ from app.schemas.settings import (
     SettingsResponse,
     SettingsUpdate,
 )
-from app.services.organizer import sanitize_path_component
 
 logger = logging.getLogger(__name__)
 

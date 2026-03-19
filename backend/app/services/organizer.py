@@ -7,7 +7,7 @@ import shutil
 
 from sqlalchemy.orm import Session
 
-from app.models.book import Book, BookFile
+from app.models.book import Book
 
 logger = logging.getLogger(__name__)
 

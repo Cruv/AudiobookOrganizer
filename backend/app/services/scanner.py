@@ -16,8 +16,15 @@ from sqlalchemy.orm import Session
 from app.models.book import Book, BookFile
 from app.models.scan import Scan, ScannedFolder
 from app.models.settings import UserSetting
-from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_folder_tags, read_tags
-from app.services.parser import ParsedMetadata, auto_match_score, clean_narrator, detect_edition, fuzzy_match, merge_with_tags, parse_folder_path
+from app.services.metadata import is_audio_file, read_folder_tags, read_tags
+from app.services.parser import (
+    ParsedMetadata,
+    auto_match_score,
+    clean_narrator,
+    detect_edition,
+    merge_with_tags,
+    parse_folder_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +130,7 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
 async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None:
     """Auto-lookup metadata for all books and apply best matches."""
     from app.services.lookup import lookup_book
-    from app.services.parser import clean_query, clean_narrator
+    from app.services.parser import clean_narrator, clean_query
 
     api_key_setting = db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     api_key = api_key_setting.value if api_key_setting else None
@@ -215,12 +222,10 @@ def _find_audiobook_folders(source_dir: str) -> list[str]:
     sorted_folders = sorted(audiobook_folders)
     for folder in sorted_folders:
         # Check if any already-added folder is a parent of this one
-        is_child_of_existing = False
         parents_to_remove = []
         for existing in filtered:
             normalized_existing = existing.rstrip(os.sep) + os.sep
             if folder.startswith(normalized_existing):
-                is_child_of_existing = True
                 # This folder is deeper - remove parent and add this one
                 parents_to_remove.append(existing)
 
@@ -326,6 +331,7 @@ def _group_multipart_books(scan: Scan, db: Session) -> None:
     Book, then deletes the duplicate Book records.
     """
     from collections import defaultdict
+
     from sqlalchemy.orm import joinedload
 
     books = (
@@ -390,6 +396,7 @@ def _detect_duplicates(scan: Scan, db: Session) -> None:
     intentionally kept separate.
     """
     from collections import defaultdict
+
     from sqlalchemy.orm import joinedload
 
     books = (

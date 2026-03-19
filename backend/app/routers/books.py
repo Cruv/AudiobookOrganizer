@@ -1,7 +1,7 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -308,7 +308,6 @@ def apply_lookup(
         raise HTTPException(status_code=404, detail="Book not found")
 
     # Re-fetch the cached results to get the specific one
-    import hashlib
     import json
 
     from app.models.lookup_cache import LookupCache

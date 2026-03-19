@@ -5,7 +5,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from app.models.book import Book, BookFile
+from app.models.book import Book
 from app.schemas.organize import PurgeResultItem, PurgeVerifyItem
 
 logger = logging.getLogger(__name__)

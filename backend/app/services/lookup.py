@@ -26,7 +26,6 @@ async def search_google_books(
     db: Session,
 ) -> list[LookupResult]:
     """Search Google Books API for matching books."""
-    cleaned = clean_query(title, author)
     query_parts = [f"intitle:{title}"]
     if author:
         query_parts.append(f"inauthor:{author}")
