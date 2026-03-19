@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Audiobook Organizer",
     description="Organize audiobooks into Chaptarr-compatible folder structures",
-    version="0.1.0",
+    version="1.0.9",
     lifespan=lifespan,
 )
 
