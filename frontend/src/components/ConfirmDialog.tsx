@@ -27,14 +27,14 @@ export default function ConfirmDialog({
   }, [onCancel]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
       <div
         className="w-full max-w-md rounded-lg border p-6"
         style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
       >
         <div className="flex items-center gap-2 mb-2">
           <AlertTriangle size={20} style={{ color: confirmColor }} />
-          <h3 className="text-lg font-semibold" style={{ color: confirmColor }}>
+          <h3 id="confirm-dialog-title" className="text-lg font-semibold" style={{ color: confirmColor }}>
             {title}
           </h3>
         </div>

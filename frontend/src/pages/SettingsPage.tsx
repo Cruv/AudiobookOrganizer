@@ -192,7 +192,13 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
     setPattern((prev) => prev + token);
   };
 
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl">

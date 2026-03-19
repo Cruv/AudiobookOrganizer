@@ -42,13 +42,15 @@ export default function LoginPage({ registrationOpen, onSuccess, onGoToRegister 
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
+            <label htmlFor="login-username" className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
               Username
             </label>
             <input
+              id="login-username"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
               autoFocus
               className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
               style={{
@@ -59,13 +61,15 @@ export default function LoginPage({ registrationOpen, onSuccess, onGoToRegister 
             />
           </div>
           <div>
-            <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
+            <label htmlFor="login-password" className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
               Password
             </label>
             <input
+              id="login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
               style={{
                 backgroundColor: 'var(--color-bg)',

@@ -47,7 +47,7 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true" aria-label="Edit Book Metadata">
       <div
         className="w-full max-w-lg rounded-lg border p-6"
         style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
