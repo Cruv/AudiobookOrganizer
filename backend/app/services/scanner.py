@@ -6,7 +6,9 @@ Performs auto-lookup for low-confidence books.
 """
 
 import asyncio
+import logging
 import os
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -15,9 +17,16 @@ from app.models.book import Book, BookFile
 from app.models.scan import Scan, ScannedFolder
 from app.models.settings import UserSetting
 from app.services.metadata import AUDIO_EXTENSIONS, is_audio_file, read_folder_tags, read_tags
-from app.services.parser import ParsedMetadata, auto_match_score, clean_narrator, detect_edition, merge_with_tags, parse_folder_path
+from app.services.parser import ParsedMetadata, auto_match_score, clean_narrator, detect_edition, fuzzy_match, merge_with_tags, parse_folder_path
+
+logger = logging.getLogger(__name__)
 
 MAX_DEPTH = 6
+
+# Regex for leaf folders that indicate multi-part audiobooks
+MULTI_PART_LEAF_PATTERN = re.compile(
+    r"^(?:Part|Pt|Disc|CD|Disk)\s*\d+", re.IGNORECASE
+)
 AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 1.0  # Look up ALL books online (no parsed book reaches 1.0)
 AUTO_APPLY_MATCH_THRESHOLD = 0.85
 
@@ -64,6 +73,17 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
                 db.add(sf)
                 scan.processed_folders += 1
                 db.commit()
+
+        # Group multi-part folders (Part 01, Part 02, etc.) into single books
+        _group_multipart_books(scan, db)
+
+        # Refresh lookup list after grouping (some books may have been merged)
+        books_for_lookup = (
+            db.query(Book)
+            .join(ScannedFolder)
+            .filter(ScannedFolder.scan_id == scan.id, Book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD)
+            .all()
+        )
 
         # Auto-lookup for low-confidence books
         if books_for_lookup:
@@ -283,3 +303,67 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
 
     scanned_folder.status = "parsed"
     return book
+
+
+def _group_multipart_books(scan: Scan, db: Session) -> None:
+    """Group multi-part audiobook folders into single book records.
+
+    Finds sibling folders like "Part 01", "Part 02" etc. under the same
+    parent directory and merges them: moves all BookFiles to the first
+    Book, then deletes the duplicate Book records.
+    """
+    from collections import defaultdict
+    from sqlalchemy.orm import joinedload
+
+    books = (
+        db.query(Book)
+        .join(ScannedFolder)
+        .options(joinedload(Book.scanned_folder), joinedload(Book.files))
+        .filter(ScannedFolder.scan_id == scan.id)
+        .all()
+    )
+
+    # Group by parent directory
+    parent_groups: dict[str, list[Book]] = defaultdict(list)
+    for book in books:
+        if not book.scanned_folder:
+            continue
+        folder_path = book.scanned_folder.folder_path
+        leaf_name = os.path.basename(folder_path)
+        if MULTI_PART_LEAF_PATTERN.match(leaf_name):
+            parent_dir = os.path.dirname(folder_path)
+            parent_groups[parent_dir].append(book)
+
+    # Merge groups with 2+ parts
+    for parent_dir, group_books in parent_groups.items():
+        if len(group_books) < 2:
+            continue
+
+        # Sort by folder name for consistent ordering (Part 01, Part 02, ...)
+        group_books.sort(key=lambda b: b.scanned_folder.folder_name)
+
+        primary = group_books[0]
+        merged_count = 0
+
+        for secondary in group_books[1:]:
+            # Move all files from secondary to primary
+            for bf in secondary.files:
+                bf.book_id = primary.id
+            db.flush()
+
+            # Delete secondary book (cascade doesn't apply since we moved files)
+            secondary_folder = secondary.scanned_folder
+            db.delete(secondary)
+            if secondary_folder:
+                secondary_folder.status = "merged"
+            merged_count += 1
+
+        logger.info(
+            "Grouped %d parts into '%s' by %s (parent: %s)",
+            len(group_books),
+            primary.title,
+            primary.author,
+            os.path.basename(parent_dir),
+        )
+
+    db.commit()
