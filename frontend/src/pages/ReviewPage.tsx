@@ -28,16 +28,30 @@ import type { Book } from '@/types';
 const PAGE_SIZE = 50;
 
 export default function ReviewPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const scanId = searchParams.get('scan_id') ? Number(searchParams.get('scan_id')) : undefined;
 
-  const [sort, setSort] = useState('confidence');
-  const [page, setPage] = useState(1);
-  const [searchInput, setSearchInput] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [filterEdition, setFilterEdition] = useState('');
-  const [filterConfirmed, setFilterConfirmed] = useState('');
-  const [filterConfidence, setFilterConfidence] = useState('');
+  // Read initial state from URL params
+  const [sort, setSort] = useState(searchParams.get('sort') || 'confidence');
+  const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
+  const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') || '');
+  const [filterEdition, setFilterEdition] = useState(searchParams.get('edition') || '');
+  const [filterConfirmed, setFilterConfirmed] = useState(searchParams.get('confirmed') || '');
+  const [filterConfidence, setFilterConfidence] = useState(searchParams.get('confidence') || '');
+
+  // Sync state to URL params
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (scanId) params.set('scan_id', String(scanId));
+    if (sort && sort !== 'confidence') params.set('sort', sort);
+    if (page > 1) params.set('page', String(page));
+    if (debouncedSearch) params.set('search', debouncedSearch);
+    if (filterEdition) params.set('edition', filterEdition);
+    if (filterConfirmed) params.set('confirmed', filterConfirmed);
+    if (filterConfidence) params.set('confidence', filterConfidence);
+    setSearchParams(params, { replace: true });
+  }, [scanId, sort, page, debouncedSearch, filterEdition, filterConfirmed, filterConfidence, setSearchParams]);
 
   // Debounce search input
   useEffect(() => {
