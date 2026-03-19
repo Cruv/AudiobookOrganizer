@@ -26,6 +26,7 @@ class ScanResponse(BaseModel):
     total_folders: int
     processed_folders: int
     error_message: str | None
+    status_detail: str | None = None
     created_at: datetime
     completed_at: datetime | None
 

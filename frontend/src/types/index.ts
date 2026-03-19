@@ -5,6 +5,7 @@ export interface Scan {
   total_folders: number;
   processed_folders: number;
   error_message: string | null;
+  status_detail: string | null;
   created_at: string;
   completed_at: string | null;
 }

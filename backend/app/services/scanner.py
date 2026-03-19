@@ -48,8 +48,12 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
             db.commit()
             return scan
 
+        scan.status_detail = "Discovering folders..."
+        db.commit()
+
         audiobook_folders = _find_audiobook_folders(source_dir)
         scan.total_folders = len(audiobook_folders)
+        scan.status_detail = f"Processing {len(audiobook_folders)} folders..."
         db.commit()
 
         books_for_lookup: list[Book] = []
@@ -75,6 +79,8 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
                 db.commit()
 
         # Group multi-part folders (Part 01, Part 02, etc.) into single books
+        scan.status_detail = "Grouping multi-part audiobooks..."
+        db.commit()
         _group_multipart_books(scan, db)
 
         # Refresh lookup list after grouping (some books may have been merged)
@@ -87,13 +93,16 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
 
         # Auto-lookup for low-confidence books
         if books_for_lookup:
+            scan.status_detail = f"Looking up {len(books_for_lookup)} books online..."
+            db.commit()
             try:
-                asyncio.run(_auto_lookup_books(books_for_lookup, db))
+                asyncio.run(_auto_lookup_books(books_for_lookup, scan, db))
             except RuntimeError:
                 # Already in an event loop (e.g. during tests)
                 pass
 
         scan.status = "completed"
+        scan.status_detail = None
         scan.completed_at = datetime.now(timezone.utc)
         db.commit()
 
@@ -106,14 +115,10 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
     return scan
 
 
-async def _auto_lookup_books(books: list[Book], db: Session) -> None:
+async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None:
     """Auto-lookup metadata for all books and apply best matches."""
-    import logging
-
     from app.services.lookup import lookup_book
     from app.services.parser import clean_query, clean_narrator
-
-    logger = logging.getLogger(__name__)
 
     api_key_setting = db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     api_key = api_key_setting.value if api_key_setting else None
@@ -124,6 +129,9 @@ async def _auto_lookup_books(books: list[Book], db: Session) -> None:
             query = clean_query(book.title, book.author)
             if not query or len(query) < 3:
                 continue
+
+            scan.status_detail = f"Looking up {idx + 1}/{total}: {query[:50]}"
+            db.commit()
 
             logger.info(f"Auto-lookup {idx + 1}/{total}: {query}")
 

@@ -122,6 +122,11 @@ export default function ScanPage() {
               }}
             />
           </div>
+          {isScanning && activeScan.status_detail && (
+            <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+              {activeScan.status_detail}
+            </p>
+          )}
           {activeScan.error_message && (
             <p className="text-xs mt-2" style={{ color: 'var(--color-danger)' }}>
               {activeScan.error_message}

@@ -32,6 +32,7 @@ def _run_migrations(engine_instance):
     migrations = [
         # (table, column, col_type_sql)
         ("books", "edition", "TEXT"),
+        ("scans", "status_detail", "TEXT"),
     ]
 
     with engine_instance.connect() as conn:

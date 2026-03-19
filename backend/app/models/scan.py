@@ -15,6 +15,7 @@ class Scan(Base):
     total_folders: Mapped[int] = mapped_column(Integer, default=0)
     processed_folders: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
