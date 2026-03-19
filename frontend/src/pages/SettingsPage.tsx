@@ -84,11 +84,16 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (settings) {
-      // registration_open is stored in UserSettings but exposed via auth status
-      // We'll read it from the settings endpoint if available
-    }
-  }, [settings]);
+    if (!isAdmin) return;
+    fetch('/api/auth/status', { cache: 'no-store', credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (typeof data.registration_open === 'boolean') {
+          setRegistrationOpen(data.registration_open);
+        }
+      })
+      .catch(() => {});
+  }, [isAdmin]);
 
   const handleCreateInvite = async () => {
     try {
@@ -117,7 +122,7 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
     try {
       await updateSettings.mutateAsync({
         registration_open: newValue ? 'true' : 'false',
-      } as Record<string, string>);
+      });
       setRegistrationOpen(newValue);
       toast.success(newValue ? 'Registration opened' : 'Registration closed');
     } catch {

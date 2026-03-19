@@ -109,6 +109,7 @@ export interface Settings {
   output_root: string;
   google_books_api_key: string | null;
   audible_locale: string | null;
+  registration_open?: string;
 }
 
 export interface PatternPreview {
