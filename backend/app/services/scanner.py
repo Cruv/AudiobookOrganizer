@@ -83,6 +83,11 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
         db.commit()
         _group_multipart_books(scan, db)
 
+        # Detect duplicate books (same title+author, different paths)
+        scan.status_detail = "Checking for duplicates..."
+        db.commit()
+        _detect_duplicates(scan, db)
+
         # Refresh lookup list after grouping (some books may have been merged)
         books_for_lookup = (
             db.query(Book)
@@ -375,3 +380,62 @@ def _group_multipart_books(scan: Scan, db: Session) -> None:
         )
 
     db.commit()
+
+
+def _detect_duplicates(scan: Scan, db: Session) -> None:
+    """Detect books with the same title+author but different editions/paths.
+
+    Logs warnings for potential duplicates so users can review them.
+    Does not auto-merge since different editions (GA vs standard) are
+    intentionally kept separate.
+    """
+    from collections import defaultdict
+    from sqlalchemy.orm import joinedload
+
+    books = (
+        db.query(Book)
+        .join(ScannedFolder)
+        .options(joinedload(Book.scanned_folder))
+        .filter(ScannedFolder.scan_id == scan.id)
+        .all()
+    )
+
+    # Group by normalized title+author
+    title_groups: dict[str, list[Book]] = defaultdict(list)
+    for book in books:
+        if not book.title:
+            continue
+        key = re.sub(r"[^a-z0-9]", "", (book.title or "").lower())
+        if book.author:
+            key += "|" + re.sub(r"[^a-z0-9]", "", book.author.lower())
+        title_groups[key].append(book)
+
+    dup_count = 0
+    for key, group in title_groups.items():
+        if len(group) < 2:
+            continue
+
+        # Check if they're actually different editions (GA vs standard)
+        editions = {b.edition or "standard" for b in group}
+        if len(editions) > 1:
+            # Different editions — expected, just log
+            logger.info(
+                "Multiple editions of '%s': %s",
+                group[0].title,
+                ", ".join(sorted(editions)),
+            )
+            continue
+
+        # Same edition, same title — true duplicates
+        dup_count += len(group) - 1
+        paths = [b.scanned_folder.folder_path if b.scanned_folder else "?" for b in group]
+        logger.warning(
+            "Duplicate detected: '%s' by %s found in %d locations: %s",
+            group[0].title,
+            group[0].author,
+            len(group),
+            "; ".join(paths),
+        )
+
+    if dup_count:
+        logger.info("Found %d potential duplicate books", dup_count)
