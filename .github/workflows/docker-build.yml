@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: CI/CD
 
 on:
   push:
@@ -12,7 +12,45 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        working-directory: backend
+        run: ruff check app/
+
+      - name: Run tests
+        working-directory: backend
+        run: pytest tests/ -v --tb=short
+        continue-on-error: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
   build-and-push:
+    needs: lint-and-test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,3 +91,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
