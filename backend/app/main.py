@@ -72,16 +72,29 @@ app.add_middleware(
 # Auth middleware — protects /api/* except /api/health and /api/auth/*
 AUTH_EXEMPT = {"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/register"}
 
+# Cached flag: once users exist, we always require auth.
+# Set to True on first user registration; avoids querying User table on every request.
+_has_users_cache: bool | None = None
+
+
+def invalidate_has_users_cache() -> None:
+    """Call after first user registration to flip the cache."""
+    global _has_users_cache
+    _has_users_cache = True
+
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    global _has_users_cache
     path = request.url.path
     # Only protect /api/* routes
     if path.startswith("/api/") and path not in AUTH_EXEMPT:
         db = SessionLocal()
         try:
-            has_users = db.query(User).first() is not None
-            if has_users:
+            # Check cached flag; only query DB if unknown
+            if _has_users_cache is None:
+                _has_users_cache = db.query(User).first() is not None
+            if _has_users_cache:
                 token = request.cookies.get("session_token")
                 if not token:
                     return JSONResponse(status_code=401, content={"detail": "Not authenticated"})

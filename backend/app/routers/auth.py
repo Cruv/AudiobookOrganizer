@@ -109,6 +109,10 @@ def register(
     db.add(user)
     db.flush()
 
+    # Invalidate the auth middleware cache so it knows users exist
+    from app.main import invalidate_has_users_cache
+    invalidate_has_users_cache()
+
     # Mark invite as used
     if invite:
         invite.used_by = user.id
