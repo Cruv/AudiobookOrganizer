@@ -14,3 +14,15 @@ services:
       - /path/to/downloads:/downloads    # raw audiobook downloads to organize
       - /path/to/audiobooks:/audiobooks    # organized output (Audiobookshelf/Chaptarr reads from here)
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
