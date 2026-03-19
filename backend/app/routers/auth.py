@@ -1,7 +1,8 @@
 import logging
+import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -12,6 +13,30 @@ from app.schemas.auth import AuthStatus, InviteResponse, LoginRequest, RegisterR
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Simple in-memory rate limiter for login attempts per IP
+_login_attempts: dict[str, list[float]] = {}
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def _check_rate_limit(client_ip: str) -> None:
+    """Raise 429 if too many failed login attempts from this IP."""
+    now = time.monotonic()
+    attempts = _login_attempts.get(client_ip, [])
+    # Prune old attempts
+    attempts = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
+    _login_attempts[client_ip] = attempts
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
+
+
+def _record_failed_attempt(client_ip: str) -> None:
+    """Record a failed login attempt for rate limiting."""
+    now = time.monotonic()
+    if client_ip not in _login_attempts:
+        _login_attempts[client_ip] = []
+    _login_attempts[client_ip].append(now)
 
 
 def _registration_open(db: Session) -> bool:
@@ -69,8 +94,8 @@ def register(
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
     if len(username) > 50:
         raise HTTPException(status_code=400, detail="Username must be 50 characters or less")
-    if len(body.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
     # Check if username taken
     existing = db.query(User).filter(User.username == username).first()
@@ -142,12 +167,17 @@ def register(
 @router.post("/login")
 def login(
     body: LoginRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
     """Log in with username and password."""
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
+
     user = db.query(User).filter(User.username == body.username.strip()).first()
     if not user or not verify_password(body.password, user.password_hash):
+        _record_failed_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     # Create session
