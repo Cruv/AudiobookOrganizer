@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { FolderOutput, Loader2, Eye, FolderCheck } from 'lucide-react';
+import { FolderOutput, Eye, FolderCheck } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
 import type { OrganizePreviewItem } from '@/types';
-import ConfidenceBadge from '@/components/ConfidenceBadge';
+import { ConfidenceBadge } from '@/components/ui/Badge';
+import { Button, Card, EmptyState, PageSkeleton } from '@/components/ui';
 
 export default function OrganizePage() {
   const { data: booksData, isLoading, refetch } = useBooks({
@@ -52,7 +53,6 @@ export default function OrganizePage() {
     setIsOrganizing(true);
     try {
       await api.executeOrganize(ids);
-      // Poll until done
       const poll = setInterval(async () => {
         await refetch();
         const remaining = books?.filter(
@@ -73,15 +73,16 @@ export default function OrganizePage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Organize</h1>
+        <PageSkeleton />
       </div>
     );
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Organize</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>
@@ -92,45 +93,34 @@ export default function OrganizePage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={selectAll}
-            className="px-3 py-2 rounded text-sm border"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
-          >
+          <Button variant="secondary" size="sm" onClick={selectAll}>
             Select All
-          </button>
-          <button
+          </Button>
+          <Button
+            size="sm"
+            icon={<Eye size={14} />}
+            loading={isPreviewing}
+            disabled={selected.size === 0}
             onClick={handlePreview}
-            disabled={selected.size === 0 || isPreviewing}
-            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-primary)' }}
           >
-            {isPreviewing ? <Loader2 size={16} className="animate-spin" /> : <Eye size={16} />}
             Preview
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="success"
+            size="sm"
+            icon={<FolderOutput size={14} />}
+            loading={isOrganizing}
+            disabled={selected.size === 0}
             onClick={handleOrganize}
-            disabled={selected.size === 0 || isOrganizing}
-            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-success)' }}
           >
-            {isOrganizing ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <FolderOutput size={16} />
-            )}
             Organize ({selected.size})
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Preview results */}
       {previews.length > 0 && (
-        <div
-          className="rounded-lg border p-4 mb-6"
-          style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-        >
-          <h3 className="text-sm font-semibold mb-3">Path Preview</h3>
+        <Card className="mb-6" header={<h3 className="text-sm font-semibold">Path Preview</h3>}>
           <div className="space-y-2">
             {previews.map((p) => (
               <div key={p.book_id} className="text-xs">
@@ -142,50 +132,47 @@ export default function OrganizePage() {
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Book list */}
       <div className="space-y-2">
         {books?.map((book) => (
-          <div
+          <Card
             key={book.id}
-            onClick={() => toggleSelect(book.id)}
-            className="flex items-center gap-4 rounded-lg border px-4 py-3 cursor-pointer"
-            style={{
-              backgroundColor: selected.has(book.id) ? 'var(--color-surface-hover)' : 'var(--color-surface)',
-              borderColor: selected.has(book.id) ? 'var(--color-primary)' : 'var(--color-border)',
-            }}
+            className="cursor-pointer"
+            borderColor={selected.has(book.id) ? 'var(--color-primary)' : undefined}
           >
-            <input
-              type="checkbox"
-              checked={selected.has(book.id)}
-              onChange={() => toggleSelect(book.id)}
-              className="flex-shrink-0"
-            />
-            <div className="flex-1 min-w-0">
-              <span className="font-medium text-sm">{book.title || 'Unknown Title'}</span>
-              <span className="text-xs ml-2" style={{ color: 'var(--color-text-muted)' }}>
-                {book.author || 'Unknown Author'}
-              </span>
-              <ConfidenceBadge confidence={book.confidence} />
+            <div
+              className="flex items-center gap-4"
+              onClick={() => toggleSelect(book.id)}
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(book.id)}
+                onChange={() => toggleSelect(book.id)}
+                className="flex-shrink-0"
+                aria-label={`Select ${book.title}`}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm truncate">{book.title || 'Unknown Title'}</span>
+                  <ConfidenceBadge confidence={book.confidence} />
+                </div>
+                <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  {book.author || 'Unknown Author'}
+                </span>
+              </div>
             </div>
-          </div>
+          </Card>
         ))}
 
         {books?.length === 0 && (
-          <div
-            className="text-center py-16 rounded-lg border"
-            style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-          >
-            <FolderCheck size={48} className="mx-auto mb-4" style={{ color: 'var(--color-text-muted)', opacity: 0.5 }} />
-            <p className="font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              No confirmed books to organize
-            </p>
-            <p className="text-sm" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
-              Go to the Review page to confirm books first.
-            </p>
-          </div>
+          <EmptyState
+            icon={FolderCheck}
+            title="No confirmed books to organize"
+            description="Go to the Review page to confirm books first."
+          />
         )}
       </div>
     </div>

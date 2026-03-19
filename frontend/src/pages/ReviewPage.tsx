@@ -3,7 +3,6 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Check,
   Edit3,
-  Loader2,
   Search,
   CheckCheck,
   Download,
@@ -18,20 +17,45 @@ import {
   useUpdateBook,
 } from '@/hooks/useBooks';
 import { exportBooks } from '@/api/client';
-import ConfidenceBadge from '@/components/ConfidenceBadge';
-import SourceBadge from '@/components/SourceBadge';
+import { ConfidenceBadge, SourceBadge, EditionBadge } from '@/components/ui/Badge';
 import BookEditModal from '@/components/BookEditModal';
 import SearchModal from '@/components/SearchModal';
 import { useToast } from '@/components/Toast';
+import { Button, Card, Input, Select, EmptyState, PageSkeleton } from '@/components/ui';
 import type { Book } from '@/types';
 
 const PAGE_SIZE = 50;
+
+const SORT_OPTIONS = [
+  { value: 'confidence', label: 'Confidence (Low first)' },
+  { value: 'confidence_desc', label: 'Confidence (High first)' },
+  { value: 'title', label: 'Title (A-Z)' },
+  { value: 'author', label: 'Author (A-Z)' },
+];
+
+const CONFIDENCE_OPTIONS = [
+  { value: '', label: 'All Confidence' },
+  { value: 'high', label: 'High (80%+)' },
+  { value: 'medium', label: 'Medium (50-80%)' },
+  { value: 'low', label: 'Low (<50%)' },
+];
+
+const EDITION_OPTIONS = [
+  { value: '', label: 'All Editions' },
+  { value: 'Graphic Audio', label: 'Graphic Audio' },
+  { value: 'standard', label: 'Standard' },
+];
+
+const STATUS_OPTIONS = [
+  { value: '', label: 'All Status' },
+  { value: 'true', label: 'Confirmed' },
+  { value: 'false', label: 'Unconfirmed' },
+];
 
 export default function ReviewPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const scanId = searchParams.get('scan_id') ? Number(searchParams.get('scan_id')) : undefined;
 
-  // Read initial state from URL params
   const [sort, setSort] = useState(searchParams.get('sort') || 'confidence');
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
@@ -53,13 +77,13 @@ export default function ReviewPage() {
     setSearchParams(params, { replace: true });
   }, [scanId, sort, page, debouncedSearch, filterEdition, filterConfirmed, filterConfidence, setSearchParams]);
 
-  // Debounce search input
+  // Debounce search
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchInput), 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Reset page when filters change
+  // Reset page on filter change
   const resetPage = useCallback(() => setPage(1), []);
   useEffect(() => { resetPage(); }, [debouncedSearch, filterEdition, filterConfirmed, filterConfidence, sort, resetPage]);
 
@@ -114,155 +138,107 @@ export default function ReviewPage() {
 
   if (isLoading && !books) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Review Books</h1>
+        <PageSkeleton />
       </div>
     );
   }
 
   const confirmedCount = books?.filter((b) => b.is_confirmed).length || 0;
+  const hasFilters = !!(debouncedSearch || filterEdition || filterConfirmed || filterConfidence);
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
           <h1 className="text-2xl font-bold">Review Books</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>
             {totalCount} books{confirmedCount > 0 && ` (${confirmedCount} confirmed on this page)`}
-            {scanId && ` · Scan #${scanId}`}
+            {scanId && ` \u00b7 Scan #${scanId}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Download size={14} />}
             onClick={handleExport}
-            className="flex items-center gap-2 px-3 py-2 rounded text-sm font-medium border"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
             title="Export matching diagnostics as JSON"
           >
-            <Download size={16} />
             Export
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="success"
+            size="sm"
+            icon={<CheckCheck size={14} />}
+            loading={confirmBatch.isPending}
             onClick={handleConfirmHighConfidence}
-            disabled={confirmBatch.isPending}
-            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white"
-            style={{ backgroundColor: 'var(--color-success)' }}
           >
-            <CheckCheck size={16} />
             Confirm High
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Filter bar */}
-      <div
-        className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 mb-4"
-        style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-      >
-        <div className="flex-1 min-w-[200px]">
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search title or author..."
-            className="w-full rounded border px-3 py-1.5 text-sm outline-none"
-            style={{
-              backgroundColor: 'var(--color-bg)',
-              borderColor: 'var(--color-border)',
-              color: 'var(--color-text)',
-            }}
+      <Card className="mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="sm:col-span-2 lg:col-span-1">
+            <Input
+              label="Search"
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Title or author..."
+            />
+          </div>
+          <Select
+            label="Sort"
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+            options={SORT_OPTIONS}
+          />
+          <Select
+            label="Confidence"
+            value={filterConfidence}
+            onChange={(e) => setFilterConfidence(e.target.value)}
+            options={CONFIDENCE_OPTIONS}
+          />
+          <Select
+            label="Edition"
+            value={filterEdition}
+            onChange={(e) => setFilterEdition(e.target.value)}
+            options={EDITION_OPTIONS}
+          />
+          <Select
+            label="Status"
+            value={filterConfirmed}
+            onChange={(e) => setFilterConfirmed(e.target.value)}
+            options={STATUS_OPTIONS}
           />
         </div>
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          className="rounded border px-2 py-1.5 text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--color-bg)',
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text)',
-          }}
-        >
-          <option value="confidence">Confidence (Low)</option>
-          <option value="confidence_desc">Confidence (High)</option>
-          <option value="title">Title (A-Z)</option>
-          <option value="author">Author (A-Z)</option>
-        </select>
-        <select
-          value={filterConfidence}
-          onChange={(e) => setFilterConfidence(e.target.value)}
-          className="rounded border px-2 py-1.5 text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--color-bg)',
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text)',
-          }}
-        >
-          <option value="">All Confidence</option>
-          <option value="high">High (80%+)</option>
-          <option value="medium">Medium (50-80%)</option>
-          <option value="low">Low (&lt;50%)</option>
-        </select>
-        <select
-          value={filterEdition}
-          onChange={(e) => setFilterEdition(e.target.value)}
-          className="rounded border px-2 py-1.5 text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--color-bg)',
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text)',
-          }}
-        >
-          <option value="">All Editions</option>
-          <option value="Graphic Audio">Graphic Audio</option>
-          <option value="standard">Standard</option>
-        </select>
-        <select
-          value={filterConfirmed}
-          onChange={(e) => setFilterConfirmed(e.target.value)}
-          className="rounded border px-2 py-1.5 text-sm outline-none"
-          style={{
-            backgroundColor: 'var(--color-bg)',
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text)',
-          }}
-        >
-          <option value="">All Status</option>
-          <option value="true">Confirmed</option>
-          <option value="false">Unconfirmed</option>
-        </select>
-      </div>
+      </Card>
 
       {/* Book list */}
       <div className="space-y-2">
         {books?.map((book) => (
-          <div
+          <Card
             key={book.id}
-            className="rounded-lg border px-4 py-3"
-            style={{
-              backgroundColor: 'var(--color-surface)',
-              borderColor: book.is_confirmed ? 'var(--color-success)' : 'var(--color-border)',
-              borderWidth: book.is_confirmed ? '2px' : '1px',
-            }}
+            borderColor={book.is_confirmed ? 'var(--color-success)' : undefined}
+            borderWidth={book.is_confirmed ? '2px' : undefined}
           >
             <div className="flex items-center gap-4">
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex flex-wrap items-center gap-2 mb-1">
                   <span className="font-medium text-sm truncate">
                     {book.title || 'Unknown Title'}
                   </span>
                   <ConfidenceBadge confidence={book.confidence} />
                   <SourceBadge source={book.source} />
-                  {book.edition && (
-                    <span
-                      className="px-1.5 py-0.5 rounded text-xs font-medium"
-                      style={{ backgroundColor: '#7c3aed22', color: '#7c3aed' }}
-                    >
-                      {book.edition}
-                    </span>
-                  )}
+                  {book.edition && <EditionBadge edition={book.edition} />}
                 </div>
-                <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   <span>{book.author || 'Unknown Author'}</span>
                   {book.series && (
                     <span>
@@ -271,39 +247,41 @@ export default function ReviewPage() {
                     </span>
                   )}
                   {book.year && <span>{book.year}</span>}
+                  {book.narrator && <span>Narrated by {book.narrator}</span>}
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5 flex-shrink-0">
-                <button
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Search size={15} />}
                   onClick={() => setSearchingBook(book)}
-                  className="p-2 rounded hover:bg-[var(--color-surface-hover)]"
-                  style={{ color: 'var(--color-text-muted)' }}
                   title="Search Online"
-                >
-                  <Search size={16} />
-                </button>
-                <button
+                  aria-label="Search online"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Edit3 size={15} />}
                   onClick={() => setEditingBook(book)}
-                  className="p-2 rounded hover:bg-[var(--color-surface-hover)]"
-                  style={{ color: 'var(--color-text-muted)' }}
                   title="Edit"
-                >
-                  <Edit3 size={16} />
-                </button>
-                <button
+                  aria-label="Edit metadata"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Check size={15} />}
                   onClick={() =>
                     confirmBook.mutate(book.id, {
                       onSuccess: () => toast.success('Book confirmed'),
                     })
                   }
                   disabled={book.is_confirmed}
-                  className="p-2 rounded hover:bg-[var(--color-surface-hover)] disabled:opacity-30"
-                  style={{ color: book.is_confirmed ? 'var(--color-success)' : 'var(--color-text-muted)' }}
                   title={book.is_confirmed ? 'Confirmed' : 'Confirm'}
-                >
-                  <Check size={16} />
-                </button>
+                  aria-label={book.is_confirmed ? 'Already confirmed' : 'Confirm book'}
+                  style={{ color: book.is_confirmed ? 'var(--color-success)' : undefined }}
+                />
               </div>
             </div>
 
@@ -321,53 +299,46 @@ export default function ReviewPage() {
                 </span>
               </div>
             </div>
-          </div>
+          </Card>
         ))}
 
         {books?.length === 0 && (
-          <div
-            className="text-center py-16 rounded-lg border"
-            style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-          >
-            <FolderSearch size={48} className="mx-auto mb-4" style={{ color: 'var(--color-text-muted)', opacity: 0.5 }} />
-            <p className="font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              {debouncedSearch || filterEdition || filterConfirmed || filterConfidence
-                ? 'No books match your filters'
-                : 'No books found'}
-            </p>
-            <p className="text-sm" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
-              {debouncedSearch || filterEdition || filterConfirmed || filterConfidence
+          <EmptyState
+            icon={FolderSearch}
+            title={hasFilters ? 'No books match your filters' : 'No books found'}
+            description={
+              hasFilters
                 ? 'Try adjusting your search or filter criteria.'
-                : 'Start by scanning a directory on the Scan page.'}
-            </p>
-          </div>
+                : 'Start by scanning a directory on the Scan page.'
+            }
+          />
         )}
       </div>
 
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-4 mt-6">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<ChevronLeft size={16} />}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="flex items-center gap-1 px-3 py-2 rounded text-sm border disabled:opacity-30"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
           >
-            <ChevronLeft size={16} />
             Previous
-          </button>
+          </Button>
           <span className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
             Page {page} of {totalPages}
           </span>
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
-            className="flex items-center gap-1 px-3 py-2 rounded text-sm border disabled:opacity-30"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
           >
             Next
             <ChevronRight size={16} />
-          </button>
+          </Button>
         </div>
       )}
 

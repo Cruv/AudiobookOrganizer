@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { useState } from 'react';
 import type { Book } from '@/types';
+import { Modal, Input, Button } from '@/components/ui';
 
 interface Props {
   book: Book;
@@ -17,14 +17,6 @@ interface Props {
 }
 
 export default function BookEditModal({ book, onSave, onClose }: Props) {
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
-
   const [title, setTitle] = useState(book.title || '');
   const [author, setAuthor] = useState(book.author || '');
   const [series, setSeries] = useState(book.series || '');
@@ -46,70 +38,43 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
     });
   };
 
+  const fields = [
+    { label: 'Title', value: title, set: setTitle },
+    { label: 'Author', value: author, set: setAuthor },
+    { label: 'Series', value: series, set: setSeries },
+    { label: 'Series Position', value: seriesPosition, set: setSeriesPosition },
+    { label: 'Year', value: year, set: setYear },
+    { label: 'Narrator', value: narrator, set: setNarrator },
+    { label: 'Edition', value: edition, set: setEdition },
+  ];
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true" aria-label="Edit Book Metadata">
-      <div
-        className="w-full max-w-lg rounded-lg border p-6"
-        style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-      >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Edit Book Metadata</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-[var(--color-surface-hover)]">
-            <X size={20} />
-          </button>
+    <Modal
+      title="Edit Book Metadata"
+      subtitle={book.folder_name || book.folder_path || undefined}
+      onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent)}>
+            Save
+          </Button>
         </div>
-
-        <p className="text-xs mb-4 truncate" style={{ color: 'var(--color-text-muted)' }}>
-          {book.folder_name || book.folder_path}
-        </p>
-
-        <form onSubmit={handleSubmit} className="space-y-3">
-          {[
-            { label: 'Title', value: title, set: setTitle },
-            { label: 'Author', value: author, set: setAuthor },
-            { label: 'Series', value: series, set: setSeries },
-            { label: 'Series Position', value: seriesPosition, set: setSeriesPosition },
-            { label: 'Year', value: year, set: setYear },
-            { label: 'Narrator', value: narrator, set: setNarrator },
-            { label: 'Edition', value: edition, set: setEdition },
-          ].map(({ label, value, set }) => (
-            <div key={label}>
-              <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
-                {label}
-              </label>
-              <input
-                type="text"
-                value={value}
-                onChange={(e) => set(e.target.value)}
-                className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
-                style={{
-                  backgroundColor: 'var(--color-bg)',
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-text)',
-                }}
-              />
-            </div>
-          ))}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded text-sm border"
-              style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 rounded text-sm font-medium text-white"
-              style={{ backgroundColor: 'var(--color-primary)' }}
-            >
-              Save
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-3">
+        {fields.map(({ label, value, set }) => (
+          <Input
+            key={label}
+            label={label}
+            type="text"
+            value={value}
+            onChange={(e) => set(e.target.value)}
+          />
+        ))}
+      </form>
+    </Modal>
   );
 }

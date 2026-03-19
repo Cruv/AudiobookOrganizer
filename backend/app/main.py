@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -11,6 +12,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s: %(message)s",
 )
+logger = logging.getLogger(__name__)
+
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
@@ -43,7 +46,7 @@ def _run_migrations(engine_instance):
             existing_cols = {row[1] for row in result}
             if column not in existing_cols:
                 conn.execute(sa.text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                logging.getLogger(__name__).info("Migration: added %s.%s", table, column)
+                logger.info("Migration: added %s.%s", table, column)
         conn.commit()
 
 
@@ -58,24 +61,46 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Audiobook Organizer",
     description="Organize audiobooks into Chaptarr-compatible folder structures",
-    version="1.0.9",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
-# CORS for dev
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Detect production: static dir exists = running in Docker behind nginx
+_is_production = os.path.isdir(os.path.join(os.path.dirname(__file__), "..", "static"))
 
-# Auth middleware — protects /api/* except /api/health and /api/auth/*
-AUTH_EXEMPT = {"/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/register"}
+# CORS — restrictive in production, permissive in dev
+if _is_production:
+    # In production, nginx serves everything on the same origin — no CORS needed.
+    # Only allow the configured origins as a safety net.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Cookie"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# --------------------------------------------------------------------------- #
+# Auth middleware — DEFAULT-DENY for /api/* with explicit exemptions
+# --------------------------------------------------------------------------- #
+# Huntarr lesson: keep the exempt list MINIMAL and use exact-match only.
+# Never use substring or endswith matching for auth bypass.
+AUTH_EXEMPT = frozenset({
+    "/api/health",
+    "/api/auth/status",
+    "/api/auth/login",
+    "/api/auth/register",
+})
 
 # Cached flag: once users exist, we always require auth.
-# Set to True on first user registration; avoids querying User table on every request.
 _has_users_cache: bool | None = None
 
 
@@ -85,33 +110,79 @@ def invalidate_has_users_cache() -> None:
     _has_users_cache = True
 
 
+# --------------------------------------------------------------------------- #
+# Global API rate limiter (Huntarr had none)
+# --------------------------------------------------------------------------- #
+_api_requests: dict[str, list[float]] = {}
+API_RATE_LIMIT = 120  # requests per window
+API_RATE_WINDOW = 60  # seconds
+
+
+def _get_client_ip(request: Request) -> str:
+    """Get real client IP, safely trusting X-Real-IP only from local nginx."""
+    if request.client and request.client.host in ("127.0.0.1", "::1"):
+        # Behind nginx — trust X-Real-IP set from $remote_addr
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip
+    return request.client.host if request.client else "unknown"
+
+
+def _check_api_rate_limit(client_ip: str) -> bool:
+    """Return True if request should be allowed."""
+    now = time.monotonic()
+    attempts = _api_requests.get(client_ip, [])
+    attempts = [t for t in attempts if now - t < API_RATE_WINDOW]
+    _api_requests[client_ip] = attempts
+    if len(attempts) >= API_RATE_LIMIT:
+        return False
+    attempts.append(now)
+    return True
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     global _has_users_cache
     path = request.url.path
-    # Only protect /api/* routes
-    if path.startswith("/api/") and path not in AUTH_EXEMPT:
-        db = SessionLocal()
-        try:
-            # Check cached flag; only query DB if unknown
-            if _has_users_cache is None:
-                _has_users_cache = db.query(User).first() is not None
-            if _has_users_cache:
-                token = request.cookies.get("session_token")
-                if not token:
-                    return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-                session = (
-                    db.query(UserSession)
-                    .filter(
-                        UserSession.token == token,
-                        UserSession.expires_at > datetime.now(timezone.utc),
+
+    # Only protect /api/* routes (static files, health check etc. pass through)
+    if path.startswith("/api/"):
+        # Rate limit all API endpoints
+        client_ip = _get_client_ip(request)
+        if not _check_api_rate_limit(client_ip):
+            logger.warning("Rate limit exceeded for %s on %s", client_ip, path)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests. Please slow down."},
+            )
+
+        # Auth check for non-exempt paths
+        if path not in AUTH_EXEMPT:
+            db = SessionLocal()
+            try:
+                # Check cached flag; only query DB if unknown
+                if _has_users_cache is None:
+                    _has_users_cache = db.query(User).first() is not None
+                if _has_users_cache:
+                    token = request.cookies.get("session_token")
+                    if not token:
+                        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+                    session = (
+                        db.query(UserSession)
+                        .filter(
+                            UserSession.token == token,
+                            UserSession.expires_at > datetime.now(timezone.utc),
+                        )
+                        .first()
                     )
-                    .first()
-                )
-                if not session:
-                    return JSONResponse(status_code=401, content={"detail": "Session expired"})
-        finally:
-            db.close()
+                    if not session:
+                        return JSONResponse(status_code=401, content={"detail": "Session expired"})
+                    # Attach user info to request state for downstream handlers
+                    request.state.user_id = session.user_id
+                    request.state.session_token = session.token
+            finally:
+                db.close()
+
     return await call_next(request)
 
 

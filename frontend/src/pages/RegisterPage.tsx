@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen, Check, X as XIcon } from 'lucide-react';
 import { register } from '@/api/client';
+import { Button, Input } from '@/components/ui';
 
 interface Props {
   inviteToken?: string;
@@ -15,6 +16,10 @@ export default function RegisterPage({ inviteToken, isFirstUser, onSuccess, onGo
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const passwordLong = password.length >= 8;
+  const passwordsMatch = password === confirmPassword && confirmPassword.length > 0;
+  const showValidation = password.length > 0;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,71 +59,52 @@ export default function RegisterPage({ inviteToken, isFirstUser, onSuccess, onGo
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              Username
-            </label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoFocus
-              className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                borderColor: 'var(--color-border)',
-                color: 'var(--color-text)',
-              }}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                borderColor: 'var(--color-border)',
-                color: 'var(--color-text)',
-              }}
-            />
-          </div>
-          <div>
-            <label className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              Confirm Password
-            </label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                borderColor: 'var(--color-border)',
-                color: 'var(--color-text)',
-              }}
-            />
-          </div>
+          <Input
+            label="Username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoFocus
+          />
+          <Input
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+          <Input
+            label="Confirm Password"
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            autoComplete="new-password"
+          />
+
+          {showValidation && (
+            <div className="space-y-1">
+              <ValidationHint passed={passwordLong} text="At least 8 characters" />
+              {confirmPassword.length > 0 && (
+                <ValidationHint passed={passwordsMatch} text="Passwords match" />
+              )}
+            </div>
+          )}
 
           {error && (
-            <p className="text-xs" style={{ color: 'var(--color-danger)' }}>
+            <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="alert">
               {error}
             </p>
           )}
 
-          <button
+          <Button
             type="submit"
-            disabled={loading || !username.trim() || !password || !confirmPassword}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-primary)' }}
+            loading={loading}
+            disabled={!username.trim() || !password || !confirmPassword}
+            className="w-full"
           >
-            {loading && <Loader2 size={16} className="animate-spin" />}
             {isFirstUser ? 'Create Admin Account' : 'Create Account'}
-          </button>
+          </Button>
         </form>
 
         {!isFirstUser && (
@@ -134,6 +120,21 @@ export default function RegisterPage({ inviteToken, isFirstUser, onSuccess, onGo
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+function ValidationHint({ passed, text }: { passed: boolean; text: string }) {
+  return (
+    <div className="flex items-center gap-1.5 text-xs">
+      {passed ? (
+        <Check size={12} style={{ color: 'var(--color-success)' }} />
+      ) : (
+        <XIcon size={12} style={{ color: 'var(--color-text-muted)' }} />
+      )}
+      <span style={{ color: passed ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+        {text}
+      </span>
     </div>
   );
 }

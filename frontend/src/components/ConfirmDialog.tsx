@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/ui';
 
 interface Props {
   title: string;
@@ -27,10 +28,18 @@ export default function ConfirmDialog({
   }, [onCancel]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
+      aria-describedby="confirm-dialog-message"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+    >
       <div
         className="w-full max-w-md rounded-lg border p-6"
         style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 mb-2">
           <AlertTriangle size={20} style={{ color: confirmColor }} />
@@ -38,17 +47,13 @@ export default function ConfirmDialog({
             {title}
           </h3>
         </div>
-        <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
+        <p id="confirm-dialog-message" className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
           {message}
         </p>
         <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 rounded text-sm border"
-            style={{ borderColor: 'var(--color-border)' }}
-          >
+          <Button variant="secondary" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
           <button
             onClick={onConfirm}
             className="px-4 py-2 rounded text-sm font-medium text-white"

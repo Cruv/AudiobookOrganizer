@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FolderOpen, FolderSearch, Loader2, Trash2 } from 'lucide-react';
+import { CheckCircle, FolderOpen, FolderSearch, Trash2, XCircle, Loader2 } from 'lucide-react';
 import { useScans, useScan, useCreateScan, useDeleteScan } from '@/hooks/useScans';
 import DirectoryBrowser from '@/components/DirectoryBrowser';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
+import { Button, Card, Input } from '@/components/ui';
 
 export default function ScanPage() {
   const [sourceDir, setSourceDir] = useState('');
@@ -22,69 +23,60 @@ export default function ScanPage() {
   const handleStartScan = () => {
     if (!sourceDir.trim()) return;
     createScan.mutate(sourceDir.trim(), {
-      onSuccess: (scan) => {
-        setActiveScanId(scan.id);
-      },
+      onSuccess: (scan) => setActiveScanId(scan.id),
     });
   };
 
   const isScanning = activeScan?.status === 'running';
   const scanComplete = activeScan?.status === 'completed';
+  const scanFailed = activeScan?.status === 'failed';
+  const progress = activeScan?.total_folders
+    ? (activeScan.processed_folders / activeScan.total_folders) * 100
+    : 0;
+
+  // Determine scan phase from status_detail
+  const getPhaseLabel = (detail?: string | null) => {
+    if (!detail) return null;
+    if (detail.startsWith('Discovering')) return 'Discovering folders';
+    if (detail.startsWith('Processing')) return 'Processing folders';
+    if (detail.startsWith('Grouping')) return 'Grouping multi-part books';
+    if (detail.startsWith('Looking up') || detail.startsWith('Auto-lookup')) return 'Looking up metadata';
+    return detail;
+  };
 
   return (
     <div className="max-w-4xl">
       <h1 className="text-2xl font-bold mb-6">Scan Directory</h1>
 
       {/* Scan input */}
-      <div
-        className="rounded-lg border p-6 mb-6"
-        style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-      >
-        <label className="block text-sm font-medium mb-2">Source Directory</label>
-        <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
-          Enter the path to your audiobook directory. The scanner will find all folders
-          containing audio files.
-        </p>
-        <div className="flex gap-3">
-          <div className="flex-1 flex gap-2">
-            <input
-              type="text"
-              value={sourceDir}
-              onChange={(e) => setSourceDir(e.target.value)}
-              placeholder="/path/to/audiobooks"
-              disabled={isScanning}
-              className="flex-1 rounded border px-3 py-2 text-sm outline-none focus:ring-2 disabled:opacity-50"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                borderColor: 'var(--color-border)',
-                color: 'var(--color-text)',
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && handleStartScan()}
-            />
-            <button
-              onClick={() => setShowBrowser(true)}
-              disabled={isScanning}
-              className="flex items-center gap-1.5 px-3 py-2 rounded text-sm border disabled:opacity-50"
-              style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
-              title="Browse directories"
-            >
-              <FolderOpen size={16} />
-              Browse
-            </button>
-          </div>
-          <button
-            onClick={handleStartScan}
-            disabled={isScanning || !sourceDir.trim()}
-            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-primary)' }}
+      <Card className="mb-6">
+        <Input
+          label="Source Directory"
+          hint="Enter the path to your audiobook directory. The scanner will find all folders containing audio files."
+          type="text"
+          value={sourceDir}
+          onChange={(e) => setSourceDir(e.target.value)}
+          placeholder="/path/to/audiobooks"
+          disabled={isScanning}
+          onKeyDown={(e) => e.key === 'Enter' && handleStartScan()}
+        />
+        <div className="flex gap-2 mt-3">
+          <Button
+            variant="secondary"
+            icon={<FolderOpen size={16} />}
+            onClick={() => setShowBrowser(true)}
+            disabled={isScanning}
           >
-            {isScanning ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <FolderSearch size={16} />
-            )}
+            Browse
+          </Button>
+          <Button
+            icon={isScanning ? undefined : <FolderSearch size={16} />}
+            loading={isScanning}
+            onClick={handleStartScan}
+            disabled={!sourceDir.trim()}
+          >
             {isScanning ? 'Scanning...' : 'Start Scan'}
-          </button>
+          </Button>
         </div>
 
         {showBrowser && (
@@ -97,51 +89,59 @@ export default function ScanPage() {
             onClose={() => setShowBrowser(false)}
           />
         )}
-      </div>
+      </Card>
 
       {/* Active scan progress */}
       {activeScan && (
-        <div
-          className="rounded-lg border p-4 mb-6"
-          style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium">
-              {isScanning ? 'Scanning...' : scanComplete ? 'Scan Complete' : 'Scan Failed'}
-            </span>
+        <Card className="mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              {isScanning && <Loader2 size={16} className="animate-spin" style={{ color: 'var(--color-primary)' }} />}
+              {scanComplete && <CheckCircle size={16} style={{ color: 'var(--color-success)' }} />}
+              {scanFailed && <XCircle size={16} style={{ color: 'var(--color-danger)' }} />}
+              <span className="text-sm font-medium">
+                {isScanning ? 'Scanning...' : scanComplete ? 'Scan Complete' : 'Scan Failed'}
+              </span>
+            </div>
             <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
               {activeScan.processed_folders} / {activeScan.total_folders} folders
             </span>
           </div>
-          <div className="w-full rounded-full h-2" style={{ backgroundColor: 'var(--color-bg)' }}>
+
+          {/* Progress bar */}
+          <div className="w-full rounded-full h-2 mb-2" style={{ backgroundColor: 'var(--color-bg)' }}>
             <div
-              className="h-2 rounded-full transition-all duration-300"
+              className="h-2 rounded-full transition-all duration-500"
               style={{
-                width: `${activeScan.total_folders > 0 ? (activeScan.processed_folders / activeScan.total_folders) * 100 : 0}%`,
-                backgroundColor: activeScan.status === 'failed' ? 'var(--color-danger)' : 'var(--color-primary)',
+                width: `${progress}%`,
+                backgroundColor: scanFailed ? 'var(--color-danger)' : 'var(--color-primary)',
               }}
             />
           </div>
+
+          {/* Phase label */}
           {isScanning && activeScan.status_detail && (
-            <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
-              {activeScan.status_detail}
+            <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+              {getPhaseLabel(activeScan.status_detail)}
             </p>
           )}
+
           {activeScan.error_message && (
             <p className="text-xs mt-2" style={{ color: 'var(--color-danger)' }}>
               {activeScan.error_message}
             </p>
           )}
+
           {scanComplete && (
-            <button
+            <Button
+              variant="success"
+              className="mt-3"
               onClick={() => navigate(`/review?scan_id=${activeScan.id}`)}
-              className="mt-3 px-4 py-2 rounded text-sm font-medium text-white"
-              style={{ backgroundColor: 'var(--color-success)' }}
             >
               Review {activeScan.total_folders} Books
-            </button>
+            </Button>
           )}
-        </div>
+        </Card>
       )}
 
       {/* Scan history */}
@@ -150,41 +150,48 @@ export default function ScanPage() {
           <h2 className="text-lg font-semibold mb-3">Scan History</h2>
           <div className="space-y-2">
             {scans.map((scan) => (
-              <div
-                key={scan.id}
-                className="flex items-center justify-between rounded-lg border px-4 py-3"
-                style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-              >
-                <div>
-                  <p className="text-sm font-medium">{scan.source_dir}</p>
-                  <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                    {scan.total_folders} folders &middot; {scan.status} &middot;{' '}
-                    {new Date(scan.created_at + 'Z').toLocaleString()}
-                  </p>
+              <Card key={scan.id}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {scan.status === 'completed' ? (
+                      <CheckCircle size={16} className="flex-shrink-0" style={{ color: 'var(--color-success)' }} />
+                    ) : scan.status === 'failed' ? (
+                      <XCircle size={16} className="flex-shrink-0" style={{ color: 'var(--color-danger)' }} />
+                    ) : (
+                      <Loader2 size={16} className="flex-shrink-0 animate-spin" style={{ color: 'var(--color-primary)' }} />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{scan.source_dir}</p>
+                      <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                        {scan.total_folders} folders &middot;{' '}
+                        {new Date(scan.created_at + 'Z').toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                    {scan.status === 'completed' && (
+                      <Button
+                        size="sm"
+                        onClick={() => navigate(`/review?scan_id=${scan.id}`)}
+                      >
+                        Review
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Trash2 size={14} />}
+                      onClick={() => setDeletingScanId(scan.id)}
+                      aria-label="Delete scan"
+                    />
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {scan.status === 'completed' && (
-                    <button
-                      onClick={() => navigate(`/review?scan_id=${scan.id}`)}
-                      className="px-3 py-1.5 rounded text-xs font-medium"
-                      style={{ backgroundColor: 'var(--color-primary)', color: 'white' }}
-                    >
-                      Review
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setDeletingScanId(scan.id)}
-                    className="p-1.5 rounded hover:bg-[var(--color-surface-hover)]"
-                    style={{ color: 'var(--color-text-muted)' }}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
+              </Card>
             ))}
           </div>
         </div>
       )}
+
       {deletingScanId !== null && (
         <ConfirmDialog
           title="Delete Scan"

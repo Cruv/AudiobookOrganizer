@@ -20,6 +20,15 @@ MAX_LOGIN_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 300  # 5 minutes
 
 
+def _get_client_ip(request: Request) -> str:
+    """Get real client IP, safely trusting X-Real-IP only from local nginx proxy."""
+    if request.client and request.client.host in ("127.0.0.1", "::1"):
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip
+    return request.client.host if request.client else "unknown"
+
+
 def _check_rate_limit(client_ip: str) -> None:
     """Raise 429 if too many failed login attempts from this IP."""
     now = time.monotonic()
@@ -37,6 +46,36 @@ def _record_failed_attempt(client_ip: str) -> None:
     if client_ip not in _login_attempts:
         _login_attempts[client_ip] = []
     _login_attempts[client_ip].append(now)
+
+
+MAX_SESSIONS_PER_USER = 10
+
+
+def _set_session_cookie(response: Response, request: Request, token: str) -> None:
+    """Set session cookie with Secure flag when behind HTTPS."""
+    is_https = request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+
+
+def _enforce_session_limit(db: Session, user_id: int) -> None:
+    """Delete oldest sessions if user exceeds the limit."""
+    sessions = (
+        db.query(UserSession)
+        .filter(UserSession.user_id == user_id)
+        .order_by(UserSession.expires_at.desc())
+        .all()
+    )
+    if len(sessions) >= MAX_SESSIONS_PER_USER:
+        for old_session in sessions[MAX_SESSIONS_PER_USER - 1:]:
+            db.delete(old_session)
 
 
 def _registration_open(db: Session) -> bool:
@@ -84,6 +123,7 @@ def auth_status(
 @router.post("/register")
 def register(
     body: RegisterRequest,
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
@@ -153,14 +193,7 @@ def register(
 
     logger.info("User registered: %s (admin=%s)", username, user.is_admin)
 
-    response.set_cookie(
-        key="session_token",
-        value=session.token,
-        httponly=True,
-        samesite="lax",
-        max_age=7 * 24 * 60 * 60,
-        path="/",
-    )
+    _set_session_cookie(response, request, session.token)
     return {"detail": "Account created", "username": user.username, "is_admin": user.is_admin}
 
 
@@ -172,13 +205,16 @@ def login(
     db: Session = Depends(get_db),
 ):
     """Log in with username and password."""
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _get_client_ip(request)
     _check_rate_limit(client_ip)
 
     user = db.query(User).filter(User.username == body.username.strip()).first()
     if not user or not verify_password(body.password, user.password_hash):
         _record_failed_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # Enforce session limit before creating new session
+    _enforce_session_limit(db, user.id)
 
     # Create session
     session = UserSession(
@@ -189,14 +225,7 @@ def login(
     db.add(session)
     db.commit()
 
-    response.set_cookie(
-        key="session_token",
-        value=session.token,
-        httponly=True,
-        samesite="lax",
-        max_age=7 * 24 * 60 * 60,
-        path="/",
-    )
+    _set_session_cookie(response, request, session.token)
     return {"detail": "Logged in", "username": user.username, "is_admin": user.is_admin}
 
 

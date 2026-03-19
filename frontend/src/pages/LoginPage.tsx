@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen } from 'lucide-react';
 import { login } from '@/api/client';
+import { Button, Input } from '@/components/ui';
 
 interface Props {
   registrationOpen: boolean;
@@ -41,59 +42,31 @@ export default function LoginPage({ registrationOpen, onSuccess, onGoToRegister 
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="login-username" className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              Username
-            </label>
-            <input
-              id="login-username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              autoFocus
-              className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                borderColor: 'var(--color-border)',
-                color: 'var(--color-text)',
-              }}
-            />
-          </div>
-          <div>
-            <label htmlFor="login-password" className="block text-sm mb-1" style={{ color: 'var(--color-text-muted)' }}>
-              Password
-            </label>
-            <input
-              id="login-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              className="w-full rounded border px-3 py-2 text-sm outline-none focus:ring-2"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                borderColor: 'var(--color-border)',
-                color: 'var(--color-text)',
-              }}
-            />
-          </div>
+          <Input
+            label="Username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            autoFocus
+          />
+          <Input
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            error={error}
+          />
 
-          {error && (
-            <p className="text-xs" style={{ color: 'var(--color-danger)' }}>
-              {error}
-            </p>
-          )}
-
-          <button
+          <Button
             type="submit"
-            disabled={loading || !username.trim() || !password}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-primary)' }}
+            loading={loading}
+            disabled={!username.trim() || !password}
+            className="w-full"
           >
-            {loading && <Loader2 size={16} className="animate-spin" />}
             Log In
-          </button>
+          </Button>
         </form>
 
         {registrationOpen && (

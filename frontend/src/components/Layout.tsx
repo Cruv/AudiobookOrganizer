@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   BookOpen,
   CheckCircle,
@@ -13,12 +13,11 @@ import {
 } from 'lucide-react';
 import { logout } from '@/api/client';
 
-const navItems = [
-  { to: '/', icon: FolderSearch, label: 'Scan' },
-  { to: '/review', icon: CheckCircle, label: 'Review' },
-  { to: '/organize', icon: FolderOutput, label: 'Organize' },
-  { to: '/purge', icon: Trash2, label: 'Purge' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
+const workflowSteps = [
+  { to: '/', icon: FolderSearch, label: 'Scan', step: 1 },
+  { to: '/review', icon: CheckCircle, label: 'Review', step: 2 },
+  { to: '/organize', icon: FolderOutput, label: 'Organize', step: 3 },
+  { to: '/purge', icon: Trash2, label: 'Purge', step: 4 },
 ];
 
 interface Props {
@@ -28,6 +27,22 @@ interface Props {
 
 export default function Layout({ username, isAdmin }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
+
+  // Close mobile sidebar on Escape
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSidebarOpen(false);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [sidebarOpen]);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
 
   const handleLogout = async () => {
     try {
@@ -38,62 +53,108 @@ export default function Layout({ username, isAdmin }: Props) {
     window.location.reload();
   };
 
+  // Determine current workflow step for visual indicator
+  const currentStepIndex = workflowSteps.findIndex((s) => s.to === location.pathname);
+
   const sidebarContent = (
     <>
-      <div className="p-4 border-b flex items-center gap-2"
-        style={{ borderColor: 'var(--color-border)' }}>
-        <BookOpen size={24} style={{ color: 'var(--color-primary)' }} />
-        <h1 className="text-lg font-bold">Audiobook Organizer</h1>
+      {/* Brand */}
+      <div className="p-4 border-b flex items-center gap-2" style={{ borderColor: 'var(--color-border)' }}>
+        <BookOpen size={22} style={{ color: 'var(--color-primary)' }} />
+        <h1 className="text-base font-bold flex-1">Audiobook Organizer</h1>
         <button
           onClick={() => setSidebarOpen(false)}
-          className="ml-auto p-1 rounded hover:bg-[var(--color-surface-hover)] md:hidden"
+          className="p-1 rounded hover:bg-[var(--color-surface-hover)] md:hidden"
           style={{ color: 'var(--color-text-muted)' }}
+          aria-label="Close navigation"
         >
           <X size={20} />
         </button>
       </div>
-      <div className="flex-1 py-2">
-        {navItems.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            onClick={() => setSidebarOpen(false)}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+
+      {/* Workflow steps */}
+      <div className="flex-1 py-3">
+        <p className="px-4 text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-muted)', opacity: 0.6 }}>
+          Workflow
+        </p>
+        {workflowSteps.map(({ to, icon: Icon, label, step }) => {
+          const isActive = location.pathname === to;
+          const isPast = currentStepIndex > step - 1;
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative"
+              style={
                 isActive
-                  ? 'font-semibold'
-                  : 'hover:bg-[var(--color-surface-hover)]'
-              }`
-            }
-            style={({ isActive }) =>
-              isActive
-                ? { backgroundColor: 'var(--color-primary)', color: 'white' }
-                : { color: 'var(--color-text-muted)' }
-            }
-          >
-            <Icon size={18} />
-            {label}
-          </NavLink>
-        ))}
+                  ? { backgroundColor: 'var(--color-primary)', color: 'white' }
+                  : { color: isPast ? 'var(--color-text)' : 'var(--color-text-muted)' }
+              }
+            >
+              {/* Step number */}
+              <span
+                className="w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center flex-shrink-0"
+                style={
+                  isActive
+                    ? { backgroundColor: 'rgba(255,255,255,0.2)', color: 'white' }
+                    : isPast
+                    ? { backgroundColor: 'var(--color-success)', color: 'white' }
+                    : { backgroundColor: 'var(--color-surface-hover)', color: 'var(--color-text-muted)' }
+                }
+              >
+                {isPast && !isActive ? '\u2713' : step}
+              </span>
+              <Icon size={16} />
+              {label}
+            </NavLink>
+          );
+        })}
+
+        {/* Separator + Settings */}
+        <div className="mx-4 my-3 border-t" style={{ borderColor: 'var(--color-border)' }} />
+        <NavLink
+          to="/settings"
+          className={({ isActive }) =>
+            `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+              isActive ? 'font-semibold' : 'hover:bg-[var(--color-surface-hover)]'
+            }`
+          }
+          style={({ isActive }) =>
+            isActive
+              ? { backgroundColor: 'var(--color-primary)', color: 'white' }
+              : { color: 'var(--color-text-muted)' }
+          }
+        >
+          <Settings size={16} />
+          Settings
+        </NavLink>
       </div>
+
+      {/* User footer */}
       <div className="p-3 border-t" style={{ borderColor: 'var(--color-border)' }}>
         {username && (
           <div className="flex items-center justify-between">
             <span className="text-xs truncate" style={{ color: 'var(--color-text-muted)' }}>
-              {username}{isAdmin && ' (admin)'}
+              {username}
+              {isAdmin && (
+                <span className="ml-1 px-1 py-0.5 rounded text-[10px]" style={{ backgroundColor: 'var(--color-primary)', color: 'white' }}>
+                  admin
+                </span>
+              )}
             </span>
             <button
               onClick={handleLogout}
               className="p-1.5 rounded hover:bg-[var(--color-surface-hover)]"
               style={{ color: 'var(--color-text-muted)' }}
               title="Log out"
+              aria-label="Log out"
             >
               <LogOut size={14} />
             </button>
           </div>
         )}
-        <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)', opacity: 0.5 }}>
-          v1.0.0
+        <p className="text-[10px] mt-1" style={{ color: 'var(--color-text-muted)', opacity: 0.4 }}>
+          v1.1.0
         </p>
       </div>
     </>
@@ -110,6 +171,8 @@ export default function Layout({ username, isAdmin }: Props) {
           onClick={() => setSidebarOpen(true)}
           className="p-1 rounded hover:bg-[var(--color-surface-hover)]"
           style={{ color: 'var(--color-text-muted)' }}
+          aria-label="Open navigation"
+          aria-expanded={sidebarOpen}
         >
           <Menu size={22} />
         </button>
@@ -122,11 +185,13 @@ export default function Layout({ username, isAdmin }: Props) {
         <div
           className="fixed inset-0 z-50 bg-black/50 md:hidden"
           onClick={() => setSidebarOpen(false)}
+          aria-label="Close navigation"
         >
           <nav
             className="w-64 h-full flex flex-col"
             style={{ backgroundColor: 'var(--color-surface)' }}
             onClick={(e) => e.stopPropagation()}
+            aria-label="Navigation"
           >
             {sidebarContent}
           </nav>
@@ -134,8 +199,11 @@ export default function Layout({ username, isAdmin }: Props) {
       )}
 
       {/* Desktop sidebar */}
-      <nav className="hidden md:flex w-56 flex-shrink-0 border-r flex-col"
-        style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}>
+      <nav
+        className="hidden md:flex w-56 flex-shrink-0 border-r flex-col"
+        style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+        aria-label="Navigation"
+      >
         {sidebarContent}
       </nav>
 

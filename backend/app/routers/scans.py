@@ -88,14 +88,23 @@ def create_scan(
     db: Session = Depends(get_db),
 ):
     """Start a new directory scan."""
+    # Input validation: reject null bytes, require absolute path
+    source_dir = body.source_dir.strip()
+    if "\x00" in source_dir:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not source_dir.startswith("/"):
+        raise HTTPException(status_code=400, detail="Source directory must be an absolute path")
+    if len(source_dir) > 4096:
+        raise HTTPException(status_code=400, detail="Path too long")
+
     # Create the scan record first so we can return the ID
-    scan = Scan(source_dir=body.source_dir, status="running")
+    scan = Scan(source_dir=source_dir, status="running")
     db.add(scan)
     db.commit()
     db.refresh(scan)
 
     # Run the actual scan in the background
-    background_tasks.add_task(_run_scan_with_id, scan.id, body.source_dir)
+    background_tasks.add_task(_run_scan_with_id, scan.id, source_dir)
 
     return scan
 

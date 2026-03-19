@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Loader2, ShieldCheck, Trash2 } from 'lucide-react';
+import { ShieldCheck, Trash2, FolderOutput, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
+import { Button, Card, EmptyState, PageSkeleton } from '@/components/ui';
 import type { PurgeVerifyItem } from '@/types';
 
 export default function PurgePage() {
@@ -70,15 +71,16 @@ export default function PurgePage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--color-primary)' }} />
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Purge Originals</h1>
+        <PageSkeleton />
       </div>
     );
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Purge Originals</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>
@@ -86,93 +88,113 @@ export default function PurgePage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => {
               if (books) setSelected(new Set(books.map((b) => b.id)));
             }}
-            className="px-3 py-2 rounded text-sm border"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
           >
             Select All
-          </button>
-          <button
+          </Button>
+          <Button
+            size="sm"
+            icon={<ShieldCheck size={14} />}
+            loading={isVerifying}
+            disabled={selected.size === 0}
             onClick={handleVerify}
-            disabled={selected.size === 0 || isVerifying}
-            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-primary)' }}
           >
-            {isVerifying ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <ShieldCheck size={16} />
-            )}
             Verify
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            icon={<Trash2 size={14} />}
+            loading={isPurging}
+            disabled={verifiedCount === 0}
             onClick={() => setShowConfirm(true)}
-            disabled={verifiedCount === 0 || isPurging}
-            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: 'var(--color-danger)' }}
           >
-            {isPurging ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
             Purge ({verifiedCount})
-          </button>
+          </Button>
         </div>
       </div>
+
+      {/* Workflow hint */}
+      {books && books.length > 0 && verifications.size === 0 && (
+        <Card className="mb-4">
+          <div className="flex items-center gap-3 text-sm" style={{ color: 'var(--color-text-muted)' }}>
+            <ShieldCheck size={18} style={{ color: 'var(--color-primary)' }} />
+            <div>
+              <p className="font-medium" style={{ color: 'var(--color-text)' }}>Step 1: Select and Verify</p>
+              <p className="text-xs">Select books, then click Verify to check that all files were copied correctly before deleting originals.</p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Book list */}
       <div className="space-y-2">
         {books?.map((book) => {
           const v = verifications.get(book.id);
           return (
-            <div
+            <Card
               key={book.id}
-              onClick={() => toggleSelect(book.id)}
-              className="flex items-center gap-4 rounded-lg border px-4 py-3 cursor-pointer"
-              style={{
-                backgroundColor: selected.has(book.id) ? 'var(--color-surface-hover)' : 'var(--color-surface)',
-                borderColor: v
+              className="cursor-pointer"
+              borderColor={
+                v
                   ? v.verified
                     ? 'var(--color-success)'
                     : 'var(--color-danger)'
-                  : 'var(--color-border)',
-              }}
+                  : selected.has(book.id)
+                  ? 'var(--color-primary)'
+                  : undefined
+              }
             >
-              <input
-                type="checkbox"
-                checked={selected.has(book.id)}
-                onChange={() => toggleSelect(book.id)}
-              />
-              <div className="flex-1 min-w-0">
-                <span className="font-medium text-sm">{book.title || 'Unknown Title'}</span>
-                <span className="text-xs ml-2" style={{ color: 'var(--color-text-muted)' }}>
-                  {book.author}
-                </span>
+              <div
+                className="flex items-center gap-4"
+                onClick={() => toggleSelect(book.id)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(book.id)}
+                  onChange={() => toggleSelect(book.id)}
+                  aria-label={`Select ${book.title}`}
+                />
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-sm">{book.title || 'Unknown Title'}</span>
+                  <span className="text-xs ml-2" style={{ color: 'var(--color-text-muted)' }}>
+                    {book.author}
+                  </span>
+                </div>
+                {v && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    {v.verified ? (
+                      <CheckCircle size={14} style={{ color: 'var(--color-success)' }} />
+                    ) : (
+                      <AlertTriangle size={14} style={{ color: 'var(--color-danger)' }} />
+                    )}
+                    <span
+                      className="text-xs px-2 py-0.5 rounded"
+                      style={{
+                        backgroundColor: v.verified ? '#166534' : '#991b1b',
+                        color: v.verified ? '#86efac' : '#fca5a5',
+                      }}
+                    >
+                      {v.verified ? 'Verified' : `${v.missing_files.length} issues`}
+                    </span>
+                  </div>
+                )}
               </div>
-              {v && (
-                <span
-                  className="text-xs px-2 py-0.5 rounded"
-                  style={{
-                    backgroundColor: v.verified ? '#166534' : '#991b1b',
-                    color: v.verified ? '#86efac' : '#fca5a5',
-                  }}
-                >
-                  {v.verified ? 'Verified' : `${v.missing_files.length} issues`}
-                </span>
-              )}
-            </div>
+            </Card>
           );
         })}
 
         {books?.length === 0 && (
-          <div
-            className="text-center py-12 rounded-lg border"
-            style={{ backgroundColor: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
-          >
-            <p style={{ color: 'var(--color-text-muted)' }}>
-              No organized books to purge. Organize books first.
-            </p>
-          </div>
+          <EmptyState
+            icon={FolderOutput}
+            title="No organized books to purge"
+            description="Organize books first, then come back to purge the originals."
+          />
         )}
       </div>
 
