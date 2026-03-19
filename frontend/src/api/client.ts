@@ -89,6 +89,7 @@ export const updateBook = (
     series_position?: string | null;
     year?: string | null;
     narrator?: string | null;
+    edition?: string | null;
   },
 ) =>
   request<Book>(`/books/${id}`, {
