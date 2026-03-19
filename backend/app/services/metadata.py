@@ -4,12 +4,15 @@ Reads tags from multiple audio files in a folder and builds
 consensus metadata from the most common values.
 """
 
+import logging
 import os
 import re
 from collections import Counter
 
 from mutagen import File as MutagenFile
 from mutagen.mp4 import MP4
+
+logger = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".mp3", ".m4b", ".m4a", ".flac", ".ogg", ".opus", ".wma", ".aac"}
 
@@ -71,7 +74,7 @@ def read_tags(file_path: str) -> dict[str, str | None]:
         result["comment"] = _get_tag(audio, "comment")
 
     except Exception:
-        pass
+        logger.debug("Failed to read tags from %s", file_path, exc_info=True)
 
     return result
 
@@ -120,7 +123,7 @@ def _read_mp4_tags(file_path: str) -> dict[str, str | None]:
             result["track"] = str(track[0][0]) if isinstance(track[0], tuple) else str(track[0])
 
     except Exception:
-        pass
+        logger.debug("Failed to read MP4 tags from %s", file_path, exc_info=True)
 
     return result
 
