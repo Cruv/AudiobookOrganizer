@@ -1,7 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -89,7 +89,7 @@ async def auth_middleware(request: Request, call_next):
                     db.query(UserSession)
                     .filter(
                         UserSession.token == token,
-                        UserSession.expires_at > datetime.utcnow(),
+                        UserSession.expires_at > datetime.now(timezone.utc),
                     )
                     .first()
                 )

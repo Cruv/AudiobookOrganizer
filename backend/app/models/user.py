@@ -1,7 +1,7 @@
 import hashlib
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -60,7 +60,7 @@ class UserSession(Base):
 
     @staticmethod
     def default_expiry() -> datetime:
-        return datetime.utcnow() + timedelta(days=7)
+        return datetime.now(timezone.utc) + timedelta(days=7)
 
 
 class Invite(Base):
@@ -81,4 +81,4 @@ class Invite(Base):
 
     @staticmethod
     def default_expiry() -> datetime:
-        return datetime.utcnow() + timedelta(days=7)
+        return datetime.now(timezone.utc) + timedelta(days=7)

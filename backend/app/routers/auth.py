@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ def _get_current_user(db: Session, session_token: str | None) -> User | None:
         db.query(UserSession)
         .filter(
             UserSession.token == session_token,
-            UserSession.expires_at > datetime.utcnow(),
+            UserSession.expires_at > datetime.now(timezone.utc),
         )
         .first()
     )
@@ -93,7 +93,7 @@ def register(
                 .filter(
                     Invite.token == body.invite_token,
                     Invite.used_by.is_(None),
-                    Invite.expires_at > datetime.utcnow(),
+                    Invite.expires_at > datetime.now(timezone.utc),
                 )
                 .first()
             )
