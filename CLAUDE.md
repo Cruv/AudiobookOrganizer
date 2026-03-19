@@ -89,18 +89,16 @@ frontend/src/
 - **Enhanced health check**: DB connectivity verification, returns 503 if DB unavailable
 
 ### Next Steps (Priority Order)
-1. **Re-scan and verify all fixes**: Run a new scan to verify all parser fixes, online lookup, and Audible integration
+1. **Re-scan and verify all fixes**: Run a new scan to verify multi-part grouping, dedup detection, and all parser fixes
 2. **Test auth flow end-to-end**: First user registration, login/logout, invite generation, closed registration
 3. **Test Audible auth flow**: Connect Audible in Settings page, verify search results during scan
-4. **Handle multi-part audiobooks**: 34 GA entries split into Part 01, Part 02. Title falls back to parent but books still create separate entries. Need grouping logic
-5. **Scattered GA copies**: 9 GA copies of Mistborn/Stormlight outside `/Graphic Audio Collection/`
+4. **WebSocket scan progress**: Replace polling with SSE/WebSocket for real-time scan updates
+5. **Bulk operations on ReviewPage**: Select multiple books, bulk confirm/edit/delete
 
 ### Known Issues
-- Multi-part folders (Part 01, Part 02) create separate book entries instead of being grouped (34 entries, all GA)
 - First scan with online lookup will be slow (~5-10 min for 254 books × 4 providers). Subsequent scans use cache
 - Audible API response structure is based on community docs — field names may differ (now logs warnings on error)
-- 9 "scattered" GA copies outside main collection creating duplicates
-- Scan progress bar via polling (1.5s interval) doesn't show lookup phase progress
+- Duplicate detection only logs warnings — no UI to view/resolve duplicates yet
 
 ### Export Data Analysis (254 books, scan 1)
 - **146 GA books** (57.5%) — detected by folder path containing "Graphic Audio" (100% coverage)
@@ -112,7 +110,21 @@ frontend/src/
 - **11 had empty () in titles** — now cleaned by `_clean_text` and post-merge cleanup
 - **12+ had author name in title** — now stripped by word-matching in `merge_with_tags`
 
-### Recent Changes (Session 2026-03-10)
+### Recent Changes (Session 2026-03-18)
+- **App maturity pass** (v1.0.1 through v1.4.0, 18 changes):
+  - **Bug fixes**: `datetime.utcnow()` → `datetime.now(timezone.utc)`, SettingsPage registration toggle type mismatch, metadata silent exceptions now logged, auth middleware caches `has_users` flag, Audible session memory leak (cap + cleanup), export endpoint streams instead of loading all into memory, organize/purge transaction safety with logging
+  - **Security**: Login rate limiting (5 attempts/5min per IP, HTTP 429), min password length 8 chars, dependency version ranges pinned with upper bounds
+  - **CI/CD**: GitHub Actions now runs ruff lint + pytest + TypeScript type-check before Docker build, Trivy container scan after push
+  - **Tests**: 53 tests for parser (clean_query, fuzzy_match, clean_narrator, detect_edition, parse_folder_path, merge_with_tags, auto_match_score), organizer (sanitize_path_component, build_output_path), and auth (password hashing, session tokens)
+  - **Multi-part book grouping**: Post-scan step detects sibling Part/Disc/CD folders under same parent, merges BookFiles into single Book record, deletes duplicates
+  - **Duplicate detection**: Post-scan step groups by normalized title+author, logs warnings for same-edition duplicates, info for expected multi-edition books
+  - **Scan progress**: New `status_detail` field on Scan model with phase-specific messages (discovering, processing, grouping, looking up N/M), displayed on ScanPage
+  - **ReviewPage URL sync**: Page, sort, search, and filter state synced to URL search params — browser back/forward restores state
+  - **Edition in API client**: `updateBook` type now includes `edition` field so BookEditModal saves correctly
+  - **Accessibility**: ARIA roles on ConfirmDialog/BookEditModal, htmlFor/autocomplete on LoginPage, SettingsPage loading spinner
+  - **Docker hardening**: Healthcheck (curl /api/health every 30s), memory limits (1G max, 256M reserved)
+
+### Previous Changes (Session 2026-03-10)
 - **Production polish** (commit `47176dd`):
   - **Authentication system**: User/UserSession/Invite models with PBKDF2 password hashing. Auth middleware on all `/api/*` routes (exempt: health, auth endpoints). Session cookies (HttpOnly, 7-day expiry). First registered user becomes admin. Open registration with admin toggle. Invite system (7-day expiry tokens) for closed registration
   - **Auth frontend**: LoginPage, RegisterPage, AuthGate in App.tsx. Sidebar shows username + logout. SettingsPage has invite management (generate, list, revoke) and registration toggle
