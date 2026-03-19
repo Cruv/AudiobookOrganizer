@@ -92,11 +92,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Lowercase image name for Trivy
+        if: github.event_name != 'pull_request'
+        id: lower
+        run: echo "image=$(echo '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Scan image for vulnerabilities
         if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          image-ref: ${{ steps.lower.outputs.image }}:latest
           format: 'table'
           exit-code: '0'
           severity: 'CRITICAL,HIGH'
