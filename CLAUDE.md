@@ -110,7 +110,16 @@ frontend/src/
 - **11 had empty () in titles** — now cleaned by `_clean_text` and post-merge cleanup
 - **12+ had author name in title** — now stripped by word-matching in `merge_with_tags`
 
-### Recent Changes (Session 2026-03-18)
+### Recent Changes (Session 2026-03-18, v1.5.0)
+- **UI/UX Redesign + Huntarr Security Hardening** (commit `aa4f3ee`, tag `v1.5.0`):
+  - **Design system**: New `components/ui/` library — Button (5 variants, loading state), Input (labeled, error/hint), Select, Card, Modal (focus trap, escape, ARIA), Badge (unified Confidence/Source/Edition/Status), Toggle (accessible switch), Skeleton (loading placeholders), EmptyState
+  - **Layout**: Numbered workflow steps (1-4) with checkmarks for completed steps, Settings separated below divider, Escape key closes mobile sidebar, admin badge on username, ARIA navigation labels
+  - **Pages refactored**: All pages use design system primitives for visual consistency. Skeleton loaders, responsive grid filter bar on ReviewPage, icon+text verification status on PurgePage, workflow guidance hints, auto-copy Audible login URL
+  - **Auth pages**: Real-time password validation (length + match indicators) on RegisterPage
+  - **Component cleanup**: Deleted LookupResults.tsx, ConfidenceBadge.tsx, SourceBadge.tsx (replaced by unified Badge)
+  - **Security (Huntarr lessons)**: Auth exempt list now `frozenset` (immutable, exact-match only). Global API rate limiter (120 req/min per IP). `_get_client_ip()` trusts X-Real-IP only from 127.0.0.1. Session cookies get `Secure` flag behind HTTPS. Max 10 sessions per user. Scan input validation: null byte rejection, absolute path required, 4096 char limit. CORS: explicit method/header allowlist in production. Nginx: X-Frame-Options DENY, `frame-ancestors 'none'` in CSP, Cross-Origin-Opener-Policy header
+
+### Previous Changes (Session 2026-03-18)
 - **App maturity pass** (v1.0.1 through v1.4.0, 18 changes):
   - **Bug fixes**: `datetime.utcnow()` → `datetime.now(timezone.utc)`, SettingsPage registration toggle type mismatch, metadata silent exceptions now logged, auth middleware caches `has_users` flag, Audible session memory leak (cap + cleanup), export endpoint streams instead of loading all into memory, organize/purge transaction safety with logging
   - **Security**: Login rate limiting (5 attempts/5min per IP, HTTP 429), min password length 8 chars, dependency version ranges pinned with upper bounds
