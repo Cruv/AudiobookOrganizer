@@ -58,10 +58,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
+APP_VERSION = "1.5.0"
+
 app = FastAPI(
     title="Audiobook Organizer",
     description="Organize audiobooks into Chaptarr-compatible folder structures",
-    version="1.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -203,7 +205,7 @@ def health_check():
         db = SessionLocal()
         db.execute(sa.text("SELECT 1"))
         db.close()
-        return {"status": "ok", "database": "connected"}
+        return {"status": "ok", "database": "connected", "version": APP_VERSION}
     except Exception:
         return JSONResponse(
             status_code=503,

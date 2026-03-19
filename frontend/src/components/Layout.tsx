@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   BookOpen,
@@ -27,7 +27,17 @@ interface Props {
 
 export default function Layout({ username, isAdmin }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const location = useLocation();
+
+  // Fetch version from API on mount
+  const fetchVersion = useCallback(() => {
+    fetch('/api/health', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => { if (data.version) setAppVersion(data.version); })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { fetchVersion(); }, [fetchVersion]);
 
   // Close mobile sidebar on Escape
   useEffect(() => {
@@ -153,9 +163,11 @@ export default function Layout({ username, isAdmin }: Props) {
             </button>
           </div>
         )}
-        <p className="text-[10px] mt-1" style={{ color: 'var(--color-text-muted)', opacity: 0.4 }}>
-          v1.1.0
-        </p>
+        {appVersion && (
+          <p className="text-[10px] mt-1" style={{ color: 'var(--color-text-muted)', opacity: 0.4 }}>
+            v{appVersion}
+          </p>
+        )}
       </div>
     </>
   );
