@@ -1,5 +1,6 @@
 """File organizer: builds output paths and copies files."""
 
+import logging
 import os
 import re
 import shutil
@@ -7,6 +8,8 @@ import shutil
 from sqlalchemy.orm import Session
 
 from app.models.book import Book, BookFile
+
+logger = logging.getLogger(__name__)
 
 
 # Characters illegal in file/folder names
@@ -99,7 +102,12 @@ def preview_output_path(book: Book, pattern: str, output_root: str) -> str:
 
 
 def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> None:
-    """Copy all files for a book to the organized output structure."""
+    """Copy all files for a book to the organized output structure.
+
+    All file copies are performed first, then DB status is updated in a
+    single commit to keep the database consistent with filesystem state.
+    On partial failure, successfully copied files are still recorded.
+    """
     output_dir = build_output_path(book, pattern, output_root)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -109,6 +117,12 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
 
     all_success = True
     for book_file in book.files:
+        if not os.path.exists(book_file.original_path):
+            logger.warning("Source file missing: %s", book_file.original_path)
+            book_file.copy_status = "failed"
+            all_success = False
+            continue
+
         try:
             dest_path = os.path.join(output_dir, book_file.filename)
             dest_path = _ensure_unique_path(dest_path)
@@ -117,11 +131,10 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
 
             book_file.destination_path = dest_path
             book_file.copy_status = "copied"
-            db.commit()
         except Exception:
+            logger.error("Failed to copy %s", book_file.original_path, exc_info=True)
             book_file.copy_status = "failed"
             all_success = False
-            db.commit()
 
     book.organize_status = "copied" if all_success else "failed"
     db.commit()

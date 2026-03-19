@@ -1,11 +1,14 @@
 """Safe deletion of original audiobook files after organization."""
 
+import logging
 import os
 
 from sqlalchemy.orm import Session
 
 from app.models.book import Book, BookFile
 from app.schemas.organize import PurgeResultItem, PurgeVerifyItem
+
+logger = logging.getLogger(__name__)
 
 
 def verify_book(book: Book) -> PurgeVerifyItem:
@@ -78,7 +81,7 @@ def purge_book(book: Book, db: Session) -> PurgeResultItem:
             if os.path.isdir(folder_path) and not os.listdir(folder_path):
                 os.rmdir(folder_path)
         except Exception:
-            pass
+            logger.warning("Could not remove empty folder: %s", folder_path, exc_info=True)
 
     return PurgeResultItem(
         book_id=book.id,
