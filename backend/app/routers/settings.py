@@ -166,9 +166,13 @@ def _cleanup_stale_sessions() -> None:
             logger.info("Cleaned up stale Audible login session")
 
 
+MAX_AUDIBLE_SESSIONS = 10
+
+
 @router.get("/audible/status", response_model=AudibleStatus)
 def audible_status(db: Session = Depends(get_db)):
     """Check if Audible is connected."""
+    _cleanup_stale_sessions()
     connected = os.path.exists(AUDIBLE_AUTH_FILE)
     locale_setting = db.query(UserSetting).filter(UserSetting.key == "audible_locale").first()
     locale = locale_setting.value if locale_setting else "us"
@@ -195,6 +199,9 @@ def audible_login_url(locale: str = "us"):
 
     # Clean up any stale sessions first
     _cleanup_stale_sessions()
+
+    if len(_audible_sessions) >= MAX_AUDIBLE_SESSIONS:
+        raise HTTPException(status_code=429, detail="Too many pending login sessions. Please try again later.")
 
     try:
         import audible  # noqa: F401 — verify package is installed
