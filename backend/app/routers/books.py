@@ -258,6 +258,51 @@ def confirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
     return {"confirmed": count}
 
 
+@router.post("/{book_id}/unconfirm", response_model=BookResponse)
+def unconfirm_book(book_id: int, db: Session = Depends(get_db)):
+    """Remove confirmation from a book."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    book.is_confirmed = False
+    db.commit()
+    db.refresh(book)
+
+    resp = BookResponse.model_validate(book)
+    _attach_book_info(book, resp, db)
+    return resp
+
+
+@router.post("/unconfirm-batch")
+def unconfirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
+    """Batch unconfirm books by IDs, confidence threshold, or all."""
+    query = db.query(Book)
+
+    if body.book_ids:
+        query = query.filter(Book.id.in_(body.book_ids))
+    elif body.min_confidence is not None:
+        query = query.filter(Book.confidence >= body.min_confidence)
+        if body.scan_id is not None:
+            query = query.join(ScannedFolder).filter(
+                ScannedFolder.scan_id == body.scan_id
+            )
+    elif body.scan_id is not None:
+        query = query.join(ScannedFolder).filter(
+            ScannedFolder.scan_id == body.scan_id
+        )
+
+    books = query.all()
+    count = 0
+    for book in books:
+        if book.is_confirmed:
+            book.is_confirmed = False
+            count += 1
+
+    db.commit()
+    return {"unconfirmed": count}
+
+
 @router.post("/{book_id}/lookup", response_model=LookupResponse)
 async def lookup_book_endpoint(book_id: int, db: Session = Depends(get_db)):
     """Trigger online metadata lookup for a book."""
