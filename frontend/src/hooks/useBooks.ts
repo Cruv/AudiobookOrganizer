@@ -54,6 +54,22 @@ export function useConfirmBatch() {
   });
 }
 
+export function useUnconfirmBook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.unconfirmBook(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}
+
+export function useUnconfirmBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.unconfirmBatch,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}
+
 export function useLookupBook() {
   return useMutation({
     mutationFn: (id: number) => api.lookupBook(id),

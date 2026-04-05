@@ -110,6 +110,19 @@ export const confirmBatch = (data: {
     body: JSON.stringify(data),
   });
 
+export const unconfirmBook = (id: number) =>
+  request<Book>(`/books/${id}/unconfirm`, { method: 'POST' });
+
+export const unconfirmBatch = (data: {
+  book_ids?: number[];
+  min_confidence?: number;
+  scan_id?: number;
+}) =>
+  request<{ unconfirmed: number }>('/books/unconfirm-batch', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
 export const lookupBook = (id: number) =>
   request<{ results: LookupResult[] }>(`/books/${id}/lookup`, { method: 'POST' });
 

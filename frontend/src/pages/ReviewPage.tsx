@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Check,
+  X,
   Edit3,
   Search,
   CheckCheck,
+  XCircle,
   Download,
   FolderSearch,
   ChevronLeft,
@@ -14,6 +16,8 @@ import {
   useBooks,
   useConfirmBook,
   useConfirmBatch,
+  useUnconfirmBook,
+  useUnconfirmBatch,
   useUpdateBook,
 } from '@/hooks/useBooks';
 import { exportBooks } from '@/api/client';
@@ -104,6 +108,8 @@ export default function ReviewPage() {
 
   const confirmBook = useConfirmBook();
   const confirmBatch = useConfirmBatch();
+  const unconfirmBook = useUnconfirmBook();
+  const unconfirmBatch = useUnconfirmBatch();
   const updateBook = useUpdateBook();
   const toast = useToast();
 
@@ -132,6 +138,17 @@ export default function ReviewPage() {
       {
         onSuccess: (data) => toast.success(`Confirmed ${data.confirmed} books`),
         onError: () => toast.error('Failed to confirm books'),
+      },
+    );
+  };
+
+  const handleResetAllConfirmations = () => {
+    if (!confirm('Reset all confirmations for this scan?')) return;
+    unconfirmBatch.mutate(
+      { scan_id: scanId },
+      {
+        onSuccess: (data) => toast.success(`Unconfirmed ${data.unconfirmed} books`),
+        onError: () => toast.error('Failed to reset confirmations'),
       },
     );
   };
@@ -177,6 +194,15 @@ export default function ReviewPage() {
             onClick={handleConfirmHighConfidence}
           >
             Confirm High
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            icon={<XCircle size={14} />}
+            loading={unconfirmBatch.isPending}
+            onClick={handleResetAllConfirmations}
+          >
+            Reset All
           </Button>
         </div>
       </div>
@@ -271,15 +297,18 @@ export default function ReviewPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  icon={<Check size={15} />}
+                  icon={book.is_confirmed ? <X size={15} /> : <Check size={15} />}
                   onClick={() =>
-                    confirmBook.mutate(book.id, {
-                      onSuccess: () => toast.success('Book confirmed'),
-                    })
+                    book.is_confirmed
+                      ? unconfirmBook.mutate(book.id, {
+                          onSuccess: () => toast.success('Book unconfirmed'),
+                        })
+                      : confirmBook.mutate(book.id, {
+                          onSuccess: () => toast.success('Book confirmed'),
+                        })
                   }
-                  disabled={book.is_confirmed}
-                  title={book.is_confirmed ? 'Confirmed' : 'Confirm'}
-                  aria-label={book.is_confirmed ? 'Already confirmed' : 'Confirm book'}
+                  title={book.is_confirmed ? 'Unconfirm' : 'Confirm'}
+                  aria-label={book.is_confirmed ? 'Unconfirm book' : 'Confirm book'}
                   style={{ color: book.is_confirmed ? 'var(--color-success)' : undefined }}
                 />
               </div>
