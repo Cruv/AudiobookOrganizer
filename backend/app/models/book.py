@@ -34,6 +34,11 @@ class Book(Base):
     # data. 0.0 when no lookup has been applied (source == "parsed").
     match_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # When locked, this book is frozen: neither re-scan nor auto-lookup
+    # will ever mutate its metadata. Stronger than is_confirmed (which
+    # only says "user approves current values"); locked says "don't even
+    # consider changing these values automatically".
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     output_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     organize_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending"

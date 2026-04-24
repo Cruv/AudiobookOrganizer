@@ -103,8 +103,9 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
         db.commit()
         _detect_duplicates(scan, db)
 
-        # Refresh lookup list after grouping and carry-forward. Confirmed
-        # books (is_confirmed=True) are skipped — user already reviewed them.
+        # Refresh lookup list after grouping and carry-forward. Skip books
+        # the user has already reviewed (is_confirmed=True) or frozen
+        # (locked=True) — both say "don't mutate this automatically".
         books_for_lookup = (
             db.query(Book)
             .join(ScannedFolder)
@@ -112,6 +113,7 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
                 ScannedFolder.scan_id == scan.id,
                 Book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD,
                 Book.is_confirmed.is_(False),
+                Book.locked.is_(False),
             )
             .all()
         )
@@ -442,8 +444,13 @@ def _carry_forward_manual_edits(scan: Scan, db: Session) -> None:
         if not prior:
             continue
 
-        # Only carry forward if the user actually touched this book.
-        user_touched = prior.is_confirmed or prior.source in ("manual", "user")
+        # Only carry forward if the user actually touched this book —
+        # confirmed, manually edited, or explicitly locked.
+        user_touched = (
+            prior.is_confirmed
+            or prior.locked
+            or prior.source in ("manual", "user")
+        )
         if not user_touched:
             continue
 
@@ -463,6 +470,7 @@ def _carry_forward_manual_edits(scan: Scan, db: Session) -> None:
         if prior.edition:
             book.edition = prior.edition
         book.is_confirmed = prior.is_confirmed
+        book.locked = prior.locked
         book.source = prior.source
         book.confidence = max(book.confidence, prior.confidence)
         # Carry forward split scores too so the review UI reflects the

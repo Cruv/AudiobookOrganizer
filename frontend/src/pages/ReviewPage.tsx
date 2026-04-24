@@ -13,6 +13,9 @@ import {
   ChevronRight,
   AlertTriangle,
   ListChecks,
+  Lock,
+  Unlock,
+  Pencil,
 } from 'lucide-react';
 import {
   useBooks,
@@ -21,12 +24,15 @@ import {
   useUnconfirmBook,
   useUnconfirmBatch,
   useUpdateBook,
+  useLockBook,
+  useUnlockBook,
 } from '@/hooks/useBooks';
 import { exportBooks } from '@/api/client';
 import { ConfidenceBadge, SourceBadge, EditionBadge } from '@/components/ui/Badge';
 import BookEditModal from '@/components/BookEditModal';
 import SearchModal from '@/components/SearchModal';
 import CandidatesModal from '@/components/CandidatesModal';
+import BulkEditModal from '@/components/BulkEditModal';
 import { useToast } from '@/components/Toast';
 import { Button, Card, Input, Select, EmptyState, PageSkeleton } from '@/components/ui';
 import type { Book } from '@/types';
@@ -114,11 +120,40 @@ export default function ReviewPage() {
   const unconfirmBook = useUnconfirmBook();
   const unconfirmBatch = useUnconfirmBatch();
   const updateBook = useUpdateBook();
+  const lockBook = useLockBook();
+  const unlockBook = useUnlockBook();
   const toast = useToast();
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [searchingBook, setSearchingBook] = useState<Book | null>(null);
   const [candidatesBook, setCandidatesBook] = useState<Book | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+
+  const toggleSelected = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllOnPage = () => {
+    if (!books) return;
+    const allOnPageSelected = books.every((b) => selectedIds.has(b.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) {
+        books.forEach((b) => next.delete(b.id));
+      } else {
+        books.forEach((b) => next.add(b.id));
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
 
   const handleExport = async () => {
     try {
@@ -250,15 +285,73 @@ export default function ReviewPage() {
         </div>
       </Card>
 
+      {/* Selection action bar: only visible when rows are selected */}
+      {selectedIds.size > 0 && (
+        <Card
+          className="mb-4"
+          style={{
+            background: 'var(--color-surface-elevated, var(--color-surface))',
+            borderColor: 'var(--color-primary)',
+          }}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm">
+              <strong>{selectedIds.size}</strong> selected
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                icon={<Pencil size={14} />}
+                onClick={() => setShowBulkEdit(true)}
+              >
+                Bulk Edit
+              </Button>
+              <Button variant="secondary" size="sm" onClick={clearSelection}>
+                Clear
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Select-all-on-page toggle */}
+      {books && books.length > 0 && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <input
+            type="checkbox"
+            className="cursor-pointer"
+            checked={books.every((b) => selectedIds.has(b.id))}
+            onChange={toggleSelectAllOnPage}
+            aria-label="Select all on this page"
+          />
+          <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            Select all on this page
+          </span>
+        </div>
+      )}
+
       {/* Book list */}
       <div className="space-y-2">
         {books?.map((book) => (
           <Card
             key={book.id}
-            borderColor={book.is_confirmed ? 'var(--color-success)' : undefined}
-            borderWidth={book.is_confirmed ? '2px' : undefined}
+            borderColor={
+              book.locked
+                ? 'var(--color-primary)'
+                : book.is_confirmed
+                  ? 'var(--color-success)'
+                  : undefined
+            }
+            borderWidth={book.is_confirmed || book.locked ? '2px' : undefined}
           >
             <div className="flex items-center gap-4">
+              <input
+                type="checkbox"
+                className="flex-shrink-0 cursor-pointer"
+                checked={selectedIds.has(book.id)}
+                onChange={() => toggleSelected(book.id)}
+                aria-label={`Select ${book.title || 'book'}`}
+              />
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2 mb-1">
                   <span className="font-medium text-sm truncate">
@@ -267,6 +360,18 @@ export default function ReviewPage() {
                   <ConfidenceBadge confidence={book.confidence} />
                   <SourceBadge source={book.source} />
                   {book.edition && <EditionBadge edition={book.edition} />}
+                  {book.locked && (
+                    <span
+                      className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded"
+                      style={{
+                        background: 'var(--color-primary)',
+                        color: 'white',
+                      }}
+                      title="Locked: re-scan and auto-lookup won't overwrite this book"
+                    >
+                      <Lock size={10} /> Locked
+                    </span>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   <span>{book.author || 'Unknown Author'}</span>
@@ -305,6 +410,27 @@ export default function ReviewPage() {
                   onClick={() => setEditingBook(book)}
                   title="Edit"
                   aria-label="Edit metadata"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={book.locked ? <Unlock size={15} /> : <Lock size={15} />}
+                  onClick={() =>
+                    book.locked
+                      ? unlockBook.mutate(book.id, {
+                          onSuccess: () => toast.success('Book unlocked'),
+                        })
+                      : lockBook.mutate(book.id, {
+                          onSuccess: () => toast.success('Book locked'),
+                        })
+                  }
+                  title={
+                    book.locked
+                      ? 'Unlock: re-scan / auto-lookup may update this book again'
+                      : 'Lock: freeze metadata so re-scan / auto-lookup never overwrites it'
+                  }
+                  aria-label={book.locked ? 'Unlock book' : 'Lock book'}
+                  style={{ color: book.locked ? 'var(--color-primary)' : undefined }}
                 />
                 <Button
                   variant="ghost"
@@ -421,6 +547,16 @@ export default function ReviewPage() {
         <CandidatesModal
           book={candidatesBook}
           onClose={() => setCandidatesBook(null)}
+        />
+      )}
+
+      {showBulkEdit && (
+        <BulkEditModal
+          bookIds={Array.from(selectedIds)}
+          onClose={() => {
+            setShowBulkEdit(false);
+            clearSelection();
+          }}
         />
       )}
     </div>

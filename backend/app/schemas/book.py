@@ -37,6 +37,7 @@ class BookResponse(BaseModel):
     parse_confidence: float = 0.0
     match_confidence: float = 0.0
     is_confirmed: bool
+    locked: bool = False
     output_path: str | None
     organize_status: str
     purge_status: str
@@ -62,6 +63,22 @@ class BookUpdate(BaseModel):
     year: str | None = None
     narrator: str | None = None
     edition: str | None = None
+
+
+class BookBulkUpdate(BaseModel):
+    """Apply a patch to many books at once.
+
+    Only the fields actually present in `patch` are updated. is_confirmed
+    and locked are applied separately because they're state flags that
+    often want to be set en masse (e.g. "select all, confirm all").
+    """
+    book_ids: list[int]
+    patch: dict[str, str | bool | None] = {}
+
+
+class BookBulkUpdateResponse(BaseModel):
+    updated: int
+    field_counts: dict[str, int]
 
 
 class BookConfirmBatch(BaseModel):

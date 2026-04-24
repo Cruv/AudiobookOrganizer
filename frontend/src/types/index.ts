@@ -39,6 +39,7 @@ export interface Book {
   parse_confidence: number;
   match_confidence: number;
   is_confirmed: boolean;
+  locked: boolean;
   output_path: string | null;
   organize_status: 'pending' | 'copying' | 'copied' | 'failed';
   purge_status: 'not_purged' | 'purged';

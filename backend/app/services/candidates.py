@@ -45,7 +45,14 @@ async def refresh_candidates(
     and (optionally) auto-apply the best one.
 
     Returns the freshly-persisted LookupCandidate rows, best first.
+
+    Locked books always get auto_apply=False regardless of the argument,
+    so the user can still inspect candidates without the book being
+    mutated behind their back.
     """
+    if book.locked:
+        auto_apply = False
+
     query = clean_query(book.title, book.author)
     if not query or len(query) < 3:
         book.lookup_error = "Query too short to look up"

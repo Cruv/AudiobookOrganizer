@@ -40,6 +40,7 @@ def _run_migrations(engine_instance):
         ("books", "lookup_error", "TEXT"),
         ("books", "parse_confidence", "FLOAT DEFAULT 0.0"),
         ("books", "match_confidence", "FLOAT DEFAULT 0.0"),
+        ("books", "locked", "BOOLEAN NOT NULL DEFAULT 0"),
         ("scans", "status_detail", "TEXT"),
     ]
 
@@ -81,7 +82,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 app = FastAPI(
     title="Audiobook Organizer",

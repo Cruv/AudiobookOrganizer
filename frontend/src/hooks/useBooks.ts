@@ -140,3 +140,33 @@ export function useRejectCandidate() {
     },
   });
 }
+
+export function useLockBook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.lockBook(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}
+
+export function useUnlockBook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.unlockBook(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}
+
+export function useBulkUpdateBooks() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      book_ids,
+      patch,
+    }: {
+      book_ids: number[];
+      patch: Record<string, string | boolean | null>;
+    }) => api.bulkUpdateBooks(book_ids, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}

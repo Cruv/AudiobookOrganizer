@@ -12,6 +12,8 @@ from app.models.scan import ScannedFolder
 from app.models.settings import UserSetting
 from app.schemas.book import (
     ApplyLookup,
+    BookBulkUpdate,
+    BookBulkUpdateResponse,
     BookConfirmBatch,
     BookDetailResponse,
     BookResponse,
@@ -200,6 +202,78 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     return resp
 
 
+# --------------------------------------------------------------------- #
+# Bulk update — applies a single patch to N books at once. Used for
+# fixing a series/author/edition across multiple books after a scan.
+# Positioned before the single-book PATCH route so FastAPI resolves
+# /books/bulk-update to this handler, not /books/{book_id}.
+# --------------------------------------------------------------------- #
+
+
+# Only these fields are safe to bulk-patch. Title is excluded because
+# bulk-setting the same title across many books is almost never intended.
+_BULK_EDITABLE_FIELDS = frozenset({
+    "author", "series", "series_position", "year",
+    "narrator", "edition", "is_confirmed", "locked",
+})
+
+
+@router.post("/bulk-update", response_model=BookBulkUpdateResponse)
+def bulk_update_books(body: BookBulkUpdate, db: Session = Depends(get_db)):
+    """Apply one patch to many books.
+
+    Only fields in _BULK_EDITABLE_FIELDS are accepted; unknown or unsafe
+    keys are silently dropped. Empty-string values set the field to None
+    (so users can bulk-clear a field). Books not found are skipped.
+    Sets source="manual" on every touched book unless the only fields
+    being patched are is_confirmed/locked (flags, not metadata edits).
+    """
+    if not body.book_ids:
+        raise HTTPException(status_code=400, detail="book_ids required")
+    if not body.patch:
+        raise HTTPException(status_code=400, detail="patch required")
+
+    # Filter to only allowed fields
+    clean_patch: dict[str, str | bool | None] = {}
+    for key, value in body.patch.items():
+        if key not in _BULK_EDITABLE_FIELDS:
+            continue
+        # Normalize empty strings to None so users can clear a field.
+        if isinstance(value, str) and value.strip() == "":
+            clean_patch[key] = None
+        else:
+            clean_patch[key] = value
+
+    if not clean_patch:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid fields in patch (allowed: "
+            + ", ".join(sorted(_BULK_EDITABLE_FIELDS)) + ")",
+        )
+
+    only_flags = set(clean_patch.keys()).issubset({"is_confirmed", "locked"})
+
+    books = db.query(Book).filter(Book.id.in_(body.book_ids)).all()
+    updated = 0
+    field_counts: dict[str, int] = {f: 0 for f in clean_patch.keys()}
+
+    for book in books:
+        touched = False
+        for field, value in clean_patch.items():
+            # Only count a change when the value actually differs.
+            if getattr(book, field) != value:
+                setattr(book, field, value)
+                field_counts[field] += 1
+                touched = True
+        if touched:
+            if not only_flags:
+                book.source = "manual"
+            updated += 1
+
+    db.commit()
+    return BookBulkUpdateResponse(updated=updated, field_counts=field_counts)
+
+
 @router.patch("/{book_id}", response_model=BookResponse)
 def update_book(book_id: int, body: BookUpdate, db: Session = Depends(get_db)):
     """Update book metadata."""
@@ -259,6 +333,36 @@ def confirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
 
     db.commit()
     return {"confirmed": count}
+
+
+@router.post("/{book_id}/lock", response_model=BookResponse)
+def lock_book(book_id: int, db: Session = Depends(get_db)):
+    """Freeze a book's metadata: neither re-scan nor auto-lookup will
+    overwrite locked fields. Useful when the book is *correct* and you
+    don't trust the parser to leave it alone on the next scan."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    book.locked = True
+    db.commit()
+    db.refresh(book)
+    resp = BookResponse.model_validate(book)
+    _attach_book_info(book, resp, db)
+    return resp
+
+
+@router.post("/{book_id}/unlock", response_model=BookResponse)
+def unlock_book(book_id: int, db: Session = Depends(get_db)):
+    """Allow auto-lookup / re-scan to mutate this book's metadata again."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    book.locked = False
+    db.commit()
+    db.refresh(book)
+    resp = BookResponse.model_validate(book)
+    _attach_book_info(book, resp, db)
+    return resp
 
 
 @router.post("/{book_id}/unconfirm", response_model=BookResponse)

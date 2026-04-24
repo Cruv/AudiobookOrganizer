@@ -170,6 +170,24 @@ export const rejectCandidate = (bookId: number, candidateId: number) =>
     method: 'POST',
   });
 
+export const lockBook = (id: number) =>
+  request<Book>(`/books/${id}/lock`, { method: 'POST' });
+
+export const unlockBook = (id: number) =>
+  request<Book>(`/books/${id}/unlock`, { method: 'POST' });
+
+export const bulkUpdateBooks = (
+  book_ids: number[],
+  patch: Record<string, string | boolean | null>,
+) =>
+  request<{ updated: number; field_counts: Record<string, number> }>(
+    '/books/bulk-update',
+    {
+      method: 'POST',
+      body: JSON.stringify({ book_ids, patch }),
+    },
+  );
+
 // Export
 export const exportBooks = async (scanId?: number) => {
   const params = scanId != null ? `?scan_id=${scanId}` : '';
