@@ -354,6 +354,70 @@ def confirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
     return {"confirmed": count}
 
 
+class MarkOrganizedBatch(BaseModel):
+    book_ids: list[int]
+
+
+def _mark_book_organized(book: Book) -> bool:
+    """Mark a book's files as in-place ("already organized") using the
+    book's scanned folder path as the destination. Returns True if the
+    book was updated. No-op on books that are already marked copied.
+
+    Useful when the user's library was organized by hand (or by another
+    tool) and we don't want to re-offer it on the Organize page.
+    """
+    if book.organize_status == "copied":
+        return False
+    if not book.scanned_folder:
+        return False
+
+    folder_path = book.scanned_folder.folder_path
+    book.organize_status = "copied"
+    book.output_path = folder_path
+    for bf in book.files:
+        bf.destination_path = bf.original_path
+        bf.copy_status = "copied"
+    return True
+
+
+@router.post("/{book_id}/mark-organized", response_model=BookResponse)
+def mark_organized(book_id: int, db: Session = Depends(get_db)):
+    """Treat this book as already organized in place (no copy needed).
+
+    Sets organize_status="copied" + output_path to the source folder +
+    every BookFile's destination_path = its original_path. Use when the
+    book is already in its final location and you don't want the
+    Organize page to re-offer it.
+    """
+    book = db.query(Book).options(joinedload(Book.files)).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    _mark_book_organized(book)
+    db.commit()
+    db.refresh(book)
+    resp = BookResponse.model_validate(book)
+    _attach_book_info(book, resp, db)
+    return resp
+
+
+@router.post("/mark-organized-batch")
+def mark_organized_batch(body: MarkOrganizedBatch, db: Session = Depends(get_db)):
+    """Bulk version of mark_organized. Skips books that are already
+    copied or that have no scanned folder."""
+    if not body.book_ids:
+        raise HTTPException(status_code=400, detail="book_ids required")
+
+    books = (
+        db.query(Book)
+        .options(joinedload(Book.files), joinedload(Book.scanned_folder))
+        .filter(Book.id.in_(body.book_ids))
+        .all()
+    )
+    updated = sum(1 for b in books if _mark_book_organized(b))
+    db.commit()
+    return {"updated": updated, "total": len(books)}
+
+
 @router.post("/{book_id}/lock", response_model=BookResponse)
 def lock_book(book_id: int, db: Session = Depends(get_db)):
     """Freeze a book's metadata: neither re-scan nor auto-lookup will

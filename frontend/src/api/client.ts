@@ -176,6 +176,15 @@ export const lockBook = (id: number) =>
 export const unlockBook = (id: number) =>
   request<Book>(`/books/${id}/unlock`, { method: 'POST' });
 
+export const markOrganized = (id: number) =>
+  request<Book>(`/books/${id}/mark-organized`, { method: 'POST' });
+
+export const markOrganizedBatch = (book_ids: number[]) =>
+  request<{ updated: number; total: number }>('/books/mark-organized-batch', {
+    method: 'POST',
+    body: JSON.stringify({ book_ids }),
+  });
+
 export const bulkUpdateBooks = (
   book_ids: number[],
   patch: Record<string, string | boolean | null>,

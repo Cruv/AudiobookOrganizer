@@ -16,6 +16,7 @@ import {
   Lock,
   Unlock,
   Pencil,
+  FolderCheck,
 } from 'lucide-react';
 import {
   useBooks,
@@ -26,6 +27,7 @@ import {
   useUpdateBook,
   useLockBook,
   useUnlockBook,
+  useMarkOrganizedBatch,
 } from '@/hooks/useBooks';
 import { exportBooks } from '@/api/client';
 import { ConfidenceBadge, SourceBadge, EditionBadge } from '@/components/ui/Badge';
@@ -150,6 +152,7 @@ export default function ReviewPage() {
   const updateBook = useUpdateBook();
   const lockBook = useLockBook();
   const unlockBook = useUnlockBook();
+  const markOrganizedBatch = useMarkOrganizedBatch();
   const toast = useToast();
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
@@ -337,6 +340,27 @@ export default function ReviewPage() {
               >
                 Bulk Edit
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<FolderCheck size={14} />}
+                loading={markOrganizedBatch.isPending}
+                title="Mark selected books as already organized (no copy). Useful when your library is already in place."
+                onClick={() => {
+                  const ids = Array.from(selectedIds);
+                  markOrganizedBatch.mutate(ids, {
+                    onSuccess: (data) => {
+                      toast.success(
+                        `Marked ${data.updated} of ${data.total} as already organized`,
+                      );
+                      clearSelection();
+                    },
+                    onError: () => toast.error('Failed to mark as organized'),
+                  });
+                }}
+              >
+                Mark Organized
+              </Button>
               <Button variant="secondary" size="sm" onClick={clearSelection}>
                 Clear
               </Button>
@@ -401,6 +425,18 @@ export default function ReviewPage() {
                       title="Locked: re-scan and auto-lookup won't overwrite this book"
                     >
                       <Lock size={10} /> Locked
+                    </span>
+                  )}
+                  {book.organize_status === 'copied' && (
+                    <span
+                      className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded"
+                      style={{
+                        background: 'var(--color-success)',
+                        color: 'white',
+                      }}
+                      title="Organized: this book is at its target path and won't be re-offered on the Organize page"
+                    >
+                      <FolderCheck size={10} /> Organized
                     </span>
                   )}
                 </div>

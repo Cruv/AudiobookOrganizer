@@ -170,3 +170,19 @@ export function useBulkUpdateBooks() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
   });
 }
+
+export function useMarkOrganized() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.markOrganized(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}
+
+export function useMarkOrganizedBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (book_ids: number[]) => api.markOrganizedBatch(book_ids),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}

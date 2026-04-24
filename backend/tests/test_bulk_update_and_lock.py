@@ -276,6 +276,122 @@ class TestBulkUpdate:
             assert resp.json()["updated"] == 2
 
 
+class TestMarkOrganized:
+    """Covers the "my library is already organized, stop asking me to
+    re-organize it" flow. Exercises both the single and batch endpoints
+    and verifies BookFile rows get their destination_path + copy_status
+    updated so the Purge page won't be confused by half-set state.
+    """
+
+    def _make_book_with_files(self, session_factory, files=2):
+        from app.models.book import Book, BookFile
+        from app.models.scan import Scan, ScannedFolder
+
+        db = session_factory()
+        scan = Scan(source_dir="/src", status="completed")
+        db.add(scan)
+        db.flush()
+        folder = ScannedFolder(
+            scan_id=scan.id, folder_path="/src/book1", folder_name="book1"
+        )
+        db.add(folder)
+        db.flush()
+        book = Book(
+            scanned_folder_id=folder.id,
+            title="Preorganized Book",
+            author="Some Author",
+            source="parsed",
+            confidence=0.5,
+        )
+        db.add(book)
+        db.flush()
+        for i in range(files):
+            db.add(BookFile(
+                book_id=book.id,
+                original_path=f"/src/book1/track{i:02d}.mp3",
+                filename=f"track{i:02d}.mp3",
+                file_size=100,
+                file_format="mp3",
+            ))
+        db.commit()
+        book_id = book.id
+        db.close()
+        return book_id
+
+    def test_single_mark_organized(self):
+        with _test_client() as (client, session):
+            book_id = self._make_book_with_files(session, files=2)
+
+            resp = client.post(f"/api/books/{book_id}/mark-organized")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["organize_status"] == "copied"
+            # Output path is the scanned folder — files are already there.
+            assert body["output_path"] == "/src/book1"
+
+            # BookFile rows should also be marked copied with destination
+            # pointing at the source (they're in the same place).
+            from app.models.book import BookFile
+            db = session()
+            try:
+                files = db.query(BookFile).filter(BookFile.book_id == book_id).all()
+                for bf in files:
+                    assert bf.copy_status == "copied"
+                    assert bf.destination_path == bf.original_path
+            finally:
+                db.close()
+
+    def test_single_mark_organized_404(self):
+        with _test_client() as (client, _session):
+            resp = client.post("/api/books/9999/mark-organized")
+            assert resp.status_code == 404
+
+    def test_batch_mark_organized(self):
+        with _test_client() as (client, session):
+            ids = [
+                self._make_book_with_files(session, files=1)
+                for _ in range(3)
+            ]
+
+            resp = client.post(
+                "/api/books/mark-organized-batch",
+                json={"book_ids": ids},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["updated"] == 3
+            assert body["total"] == 3
+
+    def test_batch_skips_already_copied(self):
+        """Running the batch twice should update each book once, not
+        double-count on the second call."""
+        with _test_client() as (client, session):
+            ids = [
+                self._make_book_with_files(session, files=1)
+                for _ in range(2)
+            ]
+
+            first = client.post(
+                "/api/books/mark-organized-batch", json={"book_ids": ids},
+            )
+            assert first.json()["updated"] == 2
+
+            second = client.post(
+                "/api/books/mark-organized-batch", json={"book_ids": ids},
+            )
+            # Nothing new to update, but endpoint should still succeed.
+            assert second.status_code == 200
+            assert second.json()["updated"] == 0
+            assert second.json()["total"] == 2
+
+    def test_batch_empty_ids_400(self):
+        with _test_client() as (client, _session):
+            resp = client.post(
+                "/api/books/mark-organized-batch", json={"book_ids": []},
+            )
+            assert resp.status_code == 400
+
+
 class TestLockFlag:
     def test_lock_unlock_endpoints(self):
         with _test_client() as (client, session):

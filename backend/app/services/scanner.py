@@ -293,6 +293,21 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     db.add(book)
     db.flush()
 
+    # If this folder already has an `.audiobook-organizer.json` sidecar,
+    # it was organized by us previously (possibly in a prior install or
+    # before the DB was recreated). Mark the book as already-organized
+    # so the Organize page doesn't re-offer it. We still re-parse
+    # metadata above so the user's current view stays fresh.
+    from app.services.organizer import SIDECAR_FILENAME
+    has_sidecar = os.path.isfile(os.path.join(folder_path, SIDECAR_FILENAME))
+    if has_sidecar:
+        book.organize_status = "copied"
+        book.output_path = folder_path
+        logger.info(
+            "Scan: detected existing organize sidecar at %s — marking as copied",
+            folder_path,
+        )
+
     # Create BookFile records (read individual tags for per-file data)
     first_tags = read_tags(audio_files[0][0])
     for filepath, filename in audio_files:
@@ -312,6 +327,11 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
             tag_year=tags.get("year"),
             tag_track=tags.get("track"),
             tag_narrator=tags.get("narrator"),
+            # When the sidecar says this folder IS the organized location,
+            # the source file IS the destination — no copy needed, it's
+            # already in place.
+            destination_path=filepath if has_sidecar else None,
+            copy_status="copied" if has_sidecar else "pending",
         )
         db.add(book_file)
 

@@ -339,6 +339,102 @@ def test_staging_suffix_is_distinctive():
     assert "audiobook-organizer" in STAGING_SUFFIX
 
 
+# --- scanner detects existing sidecars --------------------------------
+
+class TestScannerDetectsExistingSidecar:
+    """When a user scans an already-organized library (directory that
+    still has `.audiobook-organizer.json` sidecars next to its audio
+    files), every such folder should be marked as already-organized so
+    the Organize page doesn't re-offer it.
+    """
+
+    def test_folder_with_sidecar_marked_copied(self, tmp_path):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from app.models.base import Base
+        import app.models.book  # noqa: F401
+        import app.models.lookup_cache  # noqa: F401
+        import app.models.lookup_candidate  # noqa: F401
+        import app.models.scan  # noqa: F401
+        import app.models.settings  # noqa: F401
+        import app.models.user  # noqa: F401
+
+        from app.models.book import Book
+        from app.models.scan import Scan
+        from app.services.organizer import SIDECAR_FILENAME
+        from app.services.scanner import _process_folder
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+
+        # Build an already-organized book layout: audio file + sidecar.
+        book_dir = tmp_path / "Author" / "Book Title"
+        book_dir.mkdir(parents=True)
+        audio = book_dir / "chapter01.mp3"
+        audio.write_bytes(b"fake audio")
+        (book_dir / SIDECAR_FILENAME).write_text("{}", encoding="utf-8")
+
+        scan = Scan(source_dir=str(tmp_path), status="running")
+        db.add(scan)
+        db.flush()
+
+        book = _process_folder(str(book_dir), scan, db)
+        db.commit()
+
+        assert book is not None
+        assert book.organize_status == "copied"
+        assert book.output_path == str(book_dir)
+        # Every file should be flagged as already-in-place.
+        assert len(book.files) == 1
+        bf = book.files[0]
+        assert bf.copy_status == "copied"
+        assert bf.destination_path == bf.original_path
+
+        # Sanity: verify DB state matches.
+        db.refresh(book)
+        fresh = db.query(Book).filter(Book.id == book.id).first()
+        assert fresh.organize_status == "copied"
+
+    def test_folder_without_sidecar_defaults_pending(self, tmp_path):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from app.models.base import Base
+        import app.models.book  # noqa: F401
+        import app.models.lookup_cache  # noqa: F401
+        import app.models.lookup_candidate  # noqa: F401
+        import app.models.scan  # noqa: F401
+        import app.models.settings  # noqa: F401
+        import app.models.user  # noqa: F401
+
+        from app.models.scan import Scan
+        from app.services.scanner import _process_folder
+
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+
+        book_dir = tmp_path / "Author" / "Book Title"
+        book_dir.mkdir(parents=True)
+        (book_dir / "chapter01.mp3").write_bytes(b"fake")
+        # No sidecar.
+
+        scan = Scan(source_dir=str(tmp_path), status="running")
+        db.add(scan)
+        db.flush()
+
+        book = _process_folder(str(book_dir), scan, db)
+        db.commit()
+
+        assert book is not None
+        assert book.organize_status == "pending"
+        assert book.output_path is None
+        assert book.files[0].copy_status == "pending"
+        assert book.files[0].destination_path is None
+
+
 # --- startup cleanup of orphaned staging files ------------------------
 
 class TestStagingCleanup:
