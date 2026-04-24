@@ -288,6 +288,48 @@ class TestReimportFindsSidecars:
         assert folders[0].status == "skipped"
         assert folders[0].error_message is not None
 
+    def test_reimport_handles_malformed_json(self, tmp_path):
+        """A corrupt sidecar file should fail soft: folder marked skipped,
+        other books still import, overall scan still completes."""
+        from app.models.book import Book
+        from app.models.scan import ScannedFolder
+        from app.services.reimport import reimport_from_sidecars
+
+        # Corrupt sidecar
+        bad_dir = tmp_path / "bad"
+        bad_dir.mkdir()
+        (bad_dir / SIDECAR_FILENAME).write_text(
+            "{ this is not valid json",
+            encoding="utf-8",
+        )
+
+        # Valid sidecar alongside it
+        good_dir = tmp_path / "good"
+        good_dir.mkdir()
+        (good_dir / "audio.mp3").write_bytes(b"x")
+        (good_dir / SIDECAR_FILENAME).write_text(
+            json.dumps({
+                "schema_version": 1,
+                "book": {"title": "Good Book", "author": "Good Author"},
+                "files": [{"filename": "audio.mp3", "size": 1,
+                           "original_path": "/x/audio.mp3"}],
+            }),
+            encoding="utf-8",
+        )
+
+        db = self._make_db()
+        scan = reimport_from_sidecars(str(tmp_path), db)
+
+        assert scan.status == "completed"
+        # Good book imported; bad folder marked skipped with error
+        books = db.query(Book).all()
+        assert len(books) == 1
+        assert books[0].title == "Good Book"
+
+        skipped = db.query(ScannedFolder).filter(ScannedFolder.status == "skipped").all()
+        assert len(skipped) == 1
+        assert "JSONDecodeError" in (skipped[0].error_message or "")
+
 
 # --- staging suffix constant is exported ------------------------------
 
@@ -295,3 +337,37 @@ def test_staging_suffix_is_distinctive():
     """The staging suffix needs to be unlikely to collide with real
     filenames, so it includes the project name."""
     assert "audiobook-organizer" in STAGING_SUFFIX
+
+
+# --- startup cleanup of orphaned staging files ------------------------
+
+class TestStagingCleanup:
+    def test_removes_orphaned_staging_files(self, tmp_path):
+        from app.services.organizer import cleanup_orphan_staging_files
+
+        # Nested structure with some real files and some staging artifacts
+        (tmp_path / "Author" / "Book").mkdir(parents=True)
+        real = tmp_path / "Author" / "Book" / "chapter.mp3"
+        real.write_bytes(b"real")
+        orphan1 = tmp_path / "Author" / "Book" / f"chapter.mp3{STAGING_SUFFIX}"
+        orphan1.write_bytes(b"partial")
+        orphan2 = tmp_path / "Author" / f"cover.jpg{STAGING_SUFFIX}"
+        orphan2.write_bytes(b"partial")
+
+        removed = cleanup_orphan_staging_files(str(tmp_path))
+
+        assert removed == 2
+        assert real.exists()  # real files untouched
+        assert not orphan1.exists()
+        assert not orphan2.exists()
+
+    def test_missing_output_root_returns_zero(self, tmp_path):
+        from app.services.organizer import cleanup_orphan_staging_files
+
+        fake = str(tmp_path / "does_not_exist")
+        assert cleanup_orphan_staging_files(fake) == 0
+
+    def test_empty_dir_returns_zero(self, tmp_path):
+        from app.services.organizer import cleanup_orphan_staging_files
+
+        assert cleanup_orphan_staging_files(str(tmp_path)) == 0

@@ -414,6 +414,10 @@ def _carry_forward_manual_edits(scan: Scan, db: Session) -> None:
     on the next scan. We look up the most recent Book for each folder_path
     in this scan (excluding books in *this* scan) and, if its source
     indicates user intervention, copy its fields over.
+
+    Uses two bulk queries (current + user-touched priors for matching
+    folder paths) instead of N per-book lookups so rescans of large
+    libraries don't pay N round-trips to the DB.
     """
     from sqlalchemy.orm import joinedload
 
@@ -425,33 +429,45 @@ def _carry_forward_manual_edits(scan: Scan, db: Session) -> None:
         .all()
     )
 
+    # Bail early if there's nothing to carry forward into.
+    folder_paths = [b.scanned_folder.folder_path for b in current if b.scanned_folder]
+    if not folder_paths:
+        return
+
+    # One bulk query for all user-touched prior books at any of our
+    # folder paths. Order newest-first so the first hit per path wins.
+    prior_books = (
+        db.query(Book)
+        .join(ScannedFolder)
+        .options(joinedload(Book.scanned_folder))
+        .filter(
+            ScannedFolder.folder_path.in_(folder_paths),
+            ScannedFolder.scan_id != scan.id,
+        )
+        .filter(
+            (Book.is_confirmed.is_(True))
+            | (Book.locked.is_(True))
+            | (Book.source.in_(("manual", "user")))
+        )
+        .order_by(Book.updated_at.desc())
+        .all()
+    )
+
+    # Map folder_path -> newest user-touched prior.
+    prior_by_path: dict[str, Book] = {}
+    for p in prior_books:
+        if not p.scanned_folder:
+            continue
+        path = p.scanned_folder.folder_path
+        # Because we ordered newest-first, only keep the first hit per path.
+        prior_by_path.setdefault(path, p)
+
     carried = 0
     for book in current:
         if not book.scanned_folder:
             continue
-        folder_path = book.scanned_folder.folder_path
-
-        prior = (
-            db.query(Book)
-            .join(ScannedFolder)
-            .filter(
-                ScannedFolder.folder_path == folder_path,
-                ScannedFolder.scan_id != scan.id,
-            )
-            .order_by(Book.updated_at.desc())
-            .first()
-        )
+        prior = prior_by_path.get(book.scanned_folder.folder_path)
         if not prior:
-            continue
-
-        # Only carry forward if the user actually touched this book —
-        # confirmed, manually edited, or explicitly locked.
-        user_touched = (
-            prior.is_confirmed
-            or prior.locked
-            or prior.source in ("manual", "user")
-        )
-        if not user_touched:
             continue
 
         # Preserve the user's work.

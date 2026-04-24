@@ -79,10 +79,29 @@ async def lifespan(app: FastAPI):
     # Create tables on startup
     Base.metadata.create_all(bind=engine)
     _run_migrations(engine)
+    # Sweep any orphaned `*.audiobook-organizer-staging` files left by a
+    # prior interrupted organize. Safe to skip if output_root isn't set
+    # yet or doesn't exist.
+    try:
+        from app.models.settings import UserSetting
+        from app.services.organizer import cleanup_orphan_staging_files
+
+        db = SessionLocal()
+        try:
+            row = db.query(UserSetting).filter(UserSetting.key == "output_root").first()
+            root = row.value if row and row.value else None
+        finally:
+            db.close()
+        if root:
+            removed = cleanup_orphan_staging_files(root)
+            if removed:
+                logger.info("Startup: removed %d orphaned staging file(s)", removed)
+    except Exception:
+        logger.warning("Startup staging cleanup failed", exc_info=True)
     yield
 
 
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 
 app = FastAPI(
     title="Audiobook Organizer",

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models.book import Book
 from app.models.lookup_candidate import LookupCandidate
-from app.services.lookup import get_provider_trust, lookup_book
+from app.services.lookup import DEFAULT_PROVIDER_TRUST, get_provider_trust, lookup_book
 from app.services.parser import (
     ParsedMetadata,
     clean_narrator,
@@ -89,6 +89,21 @@ async def refresh_candidates(
         narrator=book.narrator,
     )
 
+    # Cache trust weights per-provider for the span of this call so we
+    # don't hit the UserSetting table once per candidate.
+    trust_cache: dict[str, float] = {}
+
+    def _trust_for(provider: str) -> float:
+        if provider not in trust_cache:
+            trust_cache[provider] = get_provider_trust(provider, db)
+        return trust_cache[provider]
+
+    # Warm the cache with known providers so obvious ones don't
+    # generate a query each. Unknown providers fall through to the
+    # per-provider DB check.
+    for prov in DEFAULT_PROVIDER_TRUST:
+        _trust_for(prov)
+
     candidates: list[LookupCandidate] = []
     for rank, result in enumerate(results):
         fp = _fingerprint(result.provider, result.title, result.author)
@@ -103,7 +118,7 @@ async def refresh_candidates(
             result_year=result.year,
             result_narrator=result.narrator,
         )
-        trust = get_provider_trust(result.provider, db)
+        trust = _trust_for(result.provider)
         match_score = breakdown.get("total") or 0.0
         ranking = match_score * trust
 
@@ -150,6 +165,9 @@ async def refresh_candidates(
                 f"threshold {AUTO_APPLY_RANKING_THRESHOLD:.2f}"
             )
 
+    # Single commit at the end of the happy path instead of several
+    # partial commits above. Early-return branches commit on their own
+    # since they need to persist the lookup_error before returning.
     db.commit()
     return candidates
 

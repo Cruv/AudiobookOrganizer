@@ -66,6 +66,34 @@ def preflight_disk_space(output_root: str, required_bytes: int) -> None:
         raise InsufficientDiskSpaceError(needed, usage.free, output_root)
 
 
+def cleanup_orphan_staging_files(output_root: str) -> int:
+    """Remove any leftover `*.audiobook-organizer-staging` files under
+    output_root. Called at app startup — if a prior organize was
+    interrupted mid-copy (process killed, container restarted), the
+    partial staging artifacts would otherwise sit forever.
+
+    Returns the number of files removed. Failures are logged but never
+    raised: startup must not be blocked by stray files.
+    """
+    if not os.path.isdir(output_root):
+        return 0
+
+    removed = 0
+    for dirpath, _, filenames in os.walk(output_root):
+        for name in filenames:
+            if name.endswith(STAGING_SUFFIX):
+                path = os.path.join(dirpath, name)
+                try:
+                    os.remove(path)
+                    removed += 1
+                    logger.info("Cleaned up orphaned staging file: %s", path)
+                except OSError as e:
+                    logger.warning(
+                        "Could not remove orphaned staging file %s: %s", path, e
+                    )
+    return removed
+
+
 def sanitize_path_component(name: str) -> str:
     """Remove illegal characters and limit length for a path component."""
     sanitized = ILLEGAL_CHARS.sub("_", name)

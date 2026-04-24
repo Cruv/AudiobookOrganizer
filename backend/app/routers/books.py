@@ -38,12 +38,26 @@ def _get_settings(db: Session) -> tuple[str, str]:
     return pattern, root
 
 
-def _attach_book_info(book: Book, resp: BookResponse, db: Session) -> None:
-    """Attach folder info and projected path to a book response."""
+def _attach_book_info(
+    book: Book,
+    resp: BookResponse,
+    db: Session,
+    *,
+    pattern: str | None = None,
+    root: str | None = None,
+) -> None:
+    """Attach folder info and projected path to a book response.
+
+    `pattern` / `root` can be passed to avoid a per-book settings lookup
+    when we're attaching info for many books in a row. When they're
+    None we fall back to _get_settings(db) so single-book callers
+    don't have to change.
+    """
     if book.scanned_folder:
         resp.folder_path = book.scanned_folder.folder_path
         resp.folder_name = book.scanned_folder.folder_name
-    pattern, root = _get_settings(db)
+    if pattern is None or root is None:
+        pattern, root = _get_settings(db)
     resp.projected_path = build_output_path(book, pattern, root)
 
 
@@ -99,10 +113,12 @@ def list_books(
     total = query.count()
     books = query.offset((page - 1) * page_size).limit(page_size).all()
 
+    # Fetch output settings once, not per-book — used to render projected_path.
+    pattern, root = _get_settings(db)
     results = []
     for book in books:
         resp = BookResponse.model_validate(book)
-        _attach_book_info(book, resp, db)
+        _attach_book_info(book, resp, db, pattern=pattern, root=root)
         results.append(resp)
 
     return PaginatedBooksResponse(

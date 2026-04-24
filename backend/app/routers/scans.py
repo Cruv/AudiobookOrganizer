@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.scan import Scan
 from app.schemas.scan import ScanCreate, ScanDetailResponse, ScanResponse
-from app.services.scanner import scan_directory
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -68,17 +67,6 @@ def browse_directory(path: str = Query(default="/")):
         "parent_path": parent if parent != path else None,
         "directories": directories,
     }
-
-
-def _run_scan(source_dir: str) -> None:
-    """Run scan in a background thread with its own DB session."""
-    from app.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        scan_directory(source_dir, db)
-    finally:
-        db.close()
 
 
 @router.post("", response_model=ScanResponse)
@@ -160,6 +148,15 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
             except Exception as e:
                 from app.models.scan import ScannedFolder
 
+                # Roll back any half-written state from _process_folder
+                # before trying to record a skip marker. Otherwise the
+                # new ScannedFolder write could collide with dirty rows
+                # still in the session.
+                try:
+                    db.rollback()
+                except Exception:
+                    logger.warning("Scan %d: rollback after per-folder error failed", scan_id)
+
                 logger.warning("Scan %d: skipped %s: %s", scan_id, folder_path, e)
                 folder_name = os.path.basename(folder_path)
                 sf = ScannedFolder(
@@ -170,6 +167,9 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
                     error_message=str(e)[:500],
                 )
                 db.add(sf)
+                # scan.processed_folders += 1 needs the Scan row live in
+                # this session — refresh in case rollback detached it.
+                db.refresh(scan)
                 scan.processed_folders += 1
                 db.commit()
 
@@ -183,6 +183,12 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
         logger.error("Scan %d FAILED: %s\n%s", scan_id, error_msg, traceback.format_exc())
 
         if db:
+            # Discard any half-written state so the status update below
+            # isn't stuck behind a dirty transaction.
+            try:
+                db.rollback()
+            except Exception:
+                pass
             try:
                 from datetime import datetime, timezone
 

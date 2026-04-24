@@ -248,6 +248,33 @@ class TestBulkUpdate:
             assert body["updated"] == 0
             assert body["field_counts"]["author"] == 0
 
+    def test_duplicate_ids_do_not_double_count(self):
+        """Passing the same book id twice shouldn't apply the patch twice."""
+        with _test_client() as (client, session):
+            ids = _seed_books(session, 1)
+            dupes = [ids[0], ids[0], ids[0]]
+            resp = client.post(
+                "/api/books/bulk-update",
+                json={"book_ids": dupes, "patch": {"author": "New"}},
+            )
+            assert resp.status_code == 200
+            # Each unique book is only counted once
+            body = resp.json()
+            assert body["updated"] == 1
+            assert body["field_counts"]["author"] == 1
+
+    def test_nonexistent_ids_skipped(self):
+        """IDs that don't exist are just ignored, not errored."""
+        with _test_client() as (client, session):
+            ids = _seed_books(session, 2)
+            mixed = [ids[0], 9999, ids[1]]
+            resp = client.post(
+                "/api/books/bulk-update",
+                json={"book_ids": mixed, "patch": {"edition": "Graphic Audio"}},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["updated"] == 2
+
 
 class TestLockFlag:
     def test_lock_unlock_endpoints(self):
@@ -313,6 +340,83 @@ class TestLockFlag:
                 assert book.match_confidence == 0.0
                 # But the candidate row is persisted so user can apply manually
                 assert db.query(LookupCandidate).count() == 1
+            finally:
+                db.close()
+
+
+class TestCarryForwardScale:
+    def test_carry_forward_does_not_loop_queries(self):
+        """Regression: previously _carry_forward_manual_edits ran one SELECT
+        per current book to find its prior version. This test creates a
+        scenario with multiple matching folder_paths across scans and
+        verifies the carry-forward still works — a follow-up micro-
+        benchmark would be overkill here."""
+        from app.models.book import Book
+        from app.models.scan import Scan, ScannedFolder
+        from app.services.scanner import _carry_forward_manual_edits
+
+        with _test_client() as (_client, session):
+            db = session()
+            try:
+                # Five folders, each with a user-touched prior book.
+                prior = Scan(source_dir="/x", status="completed")
+                db.add(prior)
+                db.flush()
+
+                new_scan = Scan(source_dir="/x", status="running")
+                db.add(new_scan)
+                db.flush()
+
+                prior_titles: dict[str, str] = {}
+                for i in range(5):
+                    path = f"/x/book{i}"
+                    # Prior (user-confirmed) book at this path
+                    pf = ScannedFolder(
+                        scan_id=prior.id, folder_path=path, folder_name=f"book{i}"
+                    )
+                    db.add(pf)
+                    db.flush()
+                    db.add(Book(
+                        scanned_folder_id=pf.id,
+                        title=f"Correct {i}",
+                        author="Correct Author",
+                        is_confirmed=True,
+                        source="manual",
+                        confidence=0.5,
+                        parse_confidence=0.5,
+                    ))
+                    prior_titles[path] = f"Correct {i}"
+
+                    # Fresh book in new scan at the same path
+                    nf = ScannedFolder(
+                        scan_id=new_scan.id, folder_path=path, folder_name=f"book{i}"
+                    )
+                    db.add(nf)
+                    db.flush()
+                    db.add(Book(
+                        scanned_folder_id=nf.id,
+                        title=f"Parsed {i}",
+                        author="Parser Author",
+                        source="parsed",
+                        confidence=0.3,
+                        parse_confidence=0.3,
+                    ))
+
+                db.commit()
+
+                _carry_forward_manual_edits(new_scan, db)
+
+                # Verify every new book inherited its matching prior title.
+                for book in (
+                    db.query(Book)
+                    .join(ScannedFolder)
+                    .filter(ScannedFolder.scan_id == new_scan.id)
+                    .all()
+                ):
+                    expected = prior_titles[book.scanned_folder.folder_path]
+                    assert book.title == expected
+                    assert book.is_confirmed is True
+                    assert book.source == "manual"
             finally:
                 db.close()
 
