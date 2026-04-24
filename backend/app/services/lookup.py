@@ -39,6 +39,21 @@ def _clean_description(text: str | None, max_len: int = 400) -> str | None:
     return collapsed[:max_len]
 
 
+def _force_https(url: str | None) -> str | None:
+    """Upgrade any `http://` scheme to `https://`.
+
+    Google Books returns cover URLs with an `http://` scheme. Browsers
+    block them via mixed-content rules on an HTTPS app and via the CSP
+    `img-src https://...` directive otherwise. Google serves covers on
+    both schemes, so a simple rewrite is enough to make them loadable.
+    """
+    if not url:
+        return url
+    if url.startswith("http://"):
+        return "https://" + url[len("http://"):]
+    return url
+
+
 CACHE_DURATION_DAYS = 30
 
 # Retry settings for external HTTP providers.
@@ -200,7 +215,9 @@ async def search_google_books(
                     series_position=series_pos,
                     year=published[:4] if len(published) >= 4 else None,
                     description=_clean_description(vol.get("description")),
-                    cover_url=(vol.get("imageLinks") or {}).get("thumbnail"),
+                    cover_url=_force_https(
+                        (vol.get("imageLinks") or {}).get("thumbnail")
+                    ),
                     confidence=0.85,
                 )
             )

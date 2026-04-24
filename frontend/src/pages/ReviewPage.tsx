@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Check,
@@ -71,11 +71,32 @@ export default function ReviewPage() {
 
   const [sort, setSort] = useState(searchParams.get('sort') || 'confidence');
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
-  const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
+  // debouncedSearch is what drives the query + URL sync. We intentionally
+  // don't keep the raw input value in React state — the <input> is
+  // uncontrolled (defaultValue only) so it never re-renders on keystroke,
+  // which guarantees the caret stays where the user put it even on slow
+  // machines rendering large book lists.
   const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') || '');
   const [filterEdition, setFilterEdition] = useState(searchParams.get('edition') || '');
   const [filterConfirmed, setFilterConfirmed] = useState(searchParams.get('confirmed') || '');
   const [filterConfidence, setFilterConfidence] = useState(searchParams.get('confidence') || '');
+
+  // Debounce timer for the uncontrolled search field.
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      setDebouncedSearch(value);
+    }, 300);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, []);
 
   // Sync state to URL params.
   //
@@ -102,12 +123,6 @@ export default function ReviewPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanId, sort, page, debouncedSearch, filterEdition, filterConfirmed, filterConfidence]);
-
-  // Debounce search
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchInput), 300);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
 
   // Reset page on filter change
   const resetPage = useCallback(() => setPage(1), []);
@@ -263,11 +278,16 @@ export default function ReviewPage() {
       <Card className="mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="sm:col-span-2 lg:col-span-1">
+            {/* Uncontrolled input: defaultValue seeds from URL once,
+                onChange pushes debounced updates to parent state. The
+                <input> never receives a new `value` prop on keystroke,
+                so React never re-renders the DOM node and focus stays
+                put even while the book list rerenders below. */}
             <Input
               label="Search"
               type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
+              defaultValue={searchParams.get('search') || ''}
+              onChange={handleSearchChange}
               placeholder="Title or author..."
             />
           </div>
