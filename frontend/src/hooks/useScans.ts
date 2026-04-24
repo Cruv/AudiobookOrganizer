@@ -29,6 +29,14 @@ export function useCreateScan() {
   });
 }
 
+export function useReimportLibrary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.reimportLibrary,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['scans'] }),
+  });
+}
+
 export function useDeleteScan() {
   const qc = useQueryClient();
   return useMutation({

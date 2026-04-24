@@ -13,7 +13,12 @@ from app.schemas.organize import (
     PurgeResponse,
     PurgeVerifyResponse,
 )
-from app.services.organizer import organize_book, preview_output_path
+from app.services.organizer import (
+    InsufficientDiskSpaceError,
+    organize_book,
+    preflight_disk_space,
+    preview_output_path,
+)
 from app.services.purger import purge_book, verify_book
 
 router = APIRouter(prefix="/api/organize", tags=["organize"])
@@ -72,7 +77,12 @@ def execute_organize(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Start organizing books (copying files)."""
+    """Start organizing books (copying files).
+
+    Performs a disk-space preflight check before scheduling the copy so
+    users get an immediate, actionable error instead of discovering
+    mid-batch that the output filesystem is full.
+    """
     pattern, root = _get_settings(db)
 
     books = (
@@ -85,12 +95,33 @@ def execute_organize(
     if not books:
         raise HTTPException(status_code=404, detail="No books found")
 
+    # Sum bytes required across all not-yet-copied files. Already-copied
+    # files don't need to be re-copied so exclude them from the estimate.
+    required = 0
+    for book in books:
+        for bf in book.files:
+            if bf.copy_status != "copied":
+                required += bf.file_size or 0
+
+    if required > 0:
+        try:
+            preflight_disk_space(root, required)
+        except InsufficientDiskSpaceError as e:
+            raise HTTPException(
+                status_code=507,  # Insufficient Storage
+                detail={
+                    "message": "Not enough free space on output volume",
+                    "output_root": e.path,
+                    "required_bytes": e.required,
+                    "available_bytes": e.available,
+                },
+            ) from e
+
     # Mark as copying
     for book in books:
         book.organize_status = "copying"
     db.commit()
 
-    # Run in background
     book_ids = [b.id for b in books]
     background_tasks.add_task(_organize_books, book_ids, pattern, root)
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, FolderOpen, FolderSearch, Trash2, XCircle, Loader2 } from 'lucide-react';
-import { useScans, useScan, useCreateScan, useDeleteScan } from '@/hooks/useScans';
+import { CheckCircle, FolderOpen, FolderSearch, Trash2, XCircle, Loader2, Download } from 'lucide-react';
+import { useScans, useScan, useCreateScan, useDeleteScan, useReimportLibrary } from '@/hooks/useScans';
 import DirectoryBrowser from '@/components/DirectoryBrowser';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
@@ -18,12 +18,24 @@ export default function ScanPage() {
   const { data: scans } = useScans();
   const { data: activeScan } = useScan(activeScanId);
   const createScan = useCreateScan();
+  const reimportLibrary = useReimportLibrary();
   const deleteScan = useDeleteScan();
 
   const handleStartScan = () => {
     if (!sourceDir.trim()) return;
     createScan.mutate(sourceDir.trim(), {
       onSuccess: (scan) => setActiveScanId(scan.id),
+    });
+  };
+
+  const handleReimport = () => {
+    if (!sourceDir.trim()) return;
+    reimportLibrary.mutate(sourceDir.trim(), {
+      onSuccess: (scan) => {
+        setActiveScanId(scan.id);
+        toast.success('Re-import started');
+      },
+      onError: (e: Error) => toast.error(e.message || 'Re-import failed to start'),
     });
   };
 
@@ -60,7 +72,7 @@ export default function ScanPage() {
           disabled={isScanning}
           onKeyDown={(e) => e.key === 'Enter' && handleStartScan()}
         />
-        <div className="flex gap-2 mt-3">
+        <div className="flex flex-wrap gap-2 mt-3">
           <Button
             variant="secondary"
             icon={<FolderOpen size={16} />}
@@ -77,7 +89,22 @@ export default function ScanPage() {
           >
             {isScanning ? 'Scanning...' : 'Start Scan'}
           </Button>
+          <Button
+            variant="secondary"
+            icon={<Download size={16} />}
+            loading={reimportLibrary.isPending}
+            onClick={handleReimport}
+            disabled={!sourceDir.trim() || isScanning}
+            title="Rebuild DB from .audiobook-organizer.json sidecar files in this directory"
+          >
+            Re-import
+          </Button>
         </div>
+        <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+          <strong>Re-import</strong> reconstructs the library from sidecar files in an
+          already-organized directory &mdash; useful if the database was lost
+          or when migrating an existing library.
+        </p>
 
         {showBrowser && (
           <DirectoryBrowser

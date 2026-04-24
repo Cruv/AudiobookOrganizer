@@ -41,6 +41,12 @@ export const createScan = (source_dir: string) =>
     body: JSON.stringify({ source_dir }),
   });
 
+export const reimportLibrary = (source_dir: string) =>
+  request<Scan>('/scans/reimport', {
+    method: 'POST',
+    body: JSON.stringify({ source_dir }),
+  });
+
 export const getScans = () => request<Scan[]>('/scans');
 
 export const getScan = (id: number) => request<ScanDetail>(`/scans/${id}`);

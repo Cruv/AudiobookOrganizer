@@ -199,6 +199,65 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
             db.close()
 
 
+@router.post("/reimport", response_model=ScanResponse)
+def reimport_library(
+    body: ScanCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Rebuild the DB from .audiobook-organizer.json sidecars under source_dir.
+
+    For disaster recovery (DB lost) or adopting a previously-organized
+    library. The scan that results contains one Book per sidecar found,
+    already in the 'copied' state — the user can immediately review,
+    re-organize under a different pattern, or purge originals.
+    """
+    source_dir = body.source_dir.strip()
+    if "\x00" in source_dir:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not source_dir.startswith("/"):
+        raise HTTPException(status_code=400, detail="Source directory must be an absolute path")
+    if len(source_dir) > 4096:
+        raise HTTPException(status_code=400, detail="Path too long")
+    if not os.path.isdir(source_dir):
+        raise HTTPException(status_code=400, detail="Directory not found")
+
+    scan = Scan(
+        source_dir=source_dir,
+        status="running",
+        status_detail="Queued for re-import...",
+    )
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+
+    background_tasks.add_task(_run_reimport_with_id, scan.id, source_dir)
+    return scan
+
+
+def _run_reimport_with_id(scan_id: int, source_dir: str) -> None:
+    """Background task wrapper for the re-import flow."""
+    import logging
+
+    from app.database import SessionLocal
+    from app.services.reimport import reimport_from_sidecars
+
+    logger = logging.getLogger("audiobook_organizer.reimport")
+    db = None
+    try:
+        db = SessionLocal()
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            logger.error("Re-import: scan %d not found", scan_id)
+            return
+        reimport_from_sidecars(source_dir, db, scan=scan)
+    except Exception:
+        logger.error("Re-import %d failed", scan_id, exc_info=True)
+    finally:
+        if db:
+            db.close()
+
+
 @router.get("", response_model=list[ScanResponse])
 def list_scans(db: Session = Depends(get_db)):
     """List all scans."""
