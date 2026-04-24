@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import random
@@ -16,6 +17,26 @@ from app.schemas.book import LookupResult
 from app.services.parser import clean_query, fuzzy_match
 
 logger = logging.getLogger(__name__)
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_description(text: str | None, max_len: int = 400) -> str | None:
+    """Strip HTML tags, decode entities, and collapse whitespace.
+
+    iTunes in particular returns descriptions with embedded markup
+    (`<i>`, `<b>`, `<br />`, `&#xa0;`). Showing that raw in the UI is
+    ugly. We never render descriptions as HTML so stripping is safe.
+    """
+    if not text:
+        return None
+    stripped = _HTML_TAG_RE.sub(" ", text)
+    decoded = html.unescape(stripped)
+    collapsed = re.sub(r"\s+", " ", decoded).strip()
+    if not collapsed:
+        return None
+    return collapsed[:max_len]
 
 
 CACHE_DURATION_DAYS = 30
@@ -178,7 +199,7 @@ async def search_google_books(
                     series=series_name,
                     series_position=series_pos,
                     year=published[:4] if len(published) >= 4 else None,
-                    description=vol.get("description", "")[:200] if vol.get("description") else None,
+                    description=_clean_description(vol.get("description")),
                     cover_url=(vol.get("imageLinks") or {}).get("thumbnail"),
                     confidence=0.85,
                 )
@@ -324,7 +345,7 @@ async def search_itunes(
                     series=series_name,
                     series_position=series_pos,
                     year=year,
-                    description=description[:200] if description else None,
+                    description=_clean_description(description),
                     cover_url=cover_url,
                     confidence=0.90,  # Higher confidence — audiobook-specific
                 )
@@ -443,7 +464,7 @@ async def search_audible(
                     series_position=series_pos,
                     year=year,
                     narrator=item_narrator,
-                    description=summary[:200] if summary else None,
+                    description=_clean_description(summary),
                     cover_url=cover_url,
                     confidence=0.92,
                 )

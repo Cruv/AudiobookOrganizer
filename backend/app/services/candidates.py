@@ -29,10 +29,12 @@ from app.services.parser import (
 logger = logging.getLogger(__name__)
 
 
-# Minimum ranking_score (= match_score × trust_weight) required before a
-# candidate is auto-applied. Separate from the raw match threshold so
-# trust-weighting actually has teeth.
-AUTO_APPLY_RANKING_THRESHOLD = 0.70
+# Minimum raw match_score required before a candidate is auto-applied.
+# Trust is used for sort order (best candidate bubbles to the top) but
+# NOT as a multiplier against the apply bar — otherwise OpenLibrary
+# (trust 0.65) could never auto-apply even on a perfect title+author
+# match, and Google Books (trust 0.75) would need match_score >= 0.93.
+AUTO_APPLY_MATCH_THRESHOLD = 0.80
 
 
 async def refresh_candidates(
@@ -153,16 +155,26 @@ async def refresh_candidates(
     # Clear any prior "no matches" error — we got some this time.
     book.lookup_error = None
 
+    # Sort candidates by ranking_score (match × trust) descending. Trust
+    # breaks ties between providers that scored similarly on match.
     candidates.sort(key=lambda c: c.ranking_score, reverse=True)
 
     if auto_apply:
-        best = candidates[0]
-        if best.ranking_score >= AUTO_APPLY_RANKING_THRESHOLD:
-            apply_candidate(book, best, db)
+        # Walk down the sorted list and apply the first candidate whose
+        # raw match_score clears the threshold. The most-trusted good
+        # match wins, but we never silently drop a high-quality OL/GB
+        # match just because of its trust weight.
+        best_applicable = next(
+            (c for c in candidates if c.match_score >= AUTO_APPLY_MATCH_THRESHOLD),
+            None,
+        )
+        if best_applicable:
+            apply_candidate(book, best_applicable, db)
         else:
+            top = candidates[0]
             book.lookup_error = (
-                f"Best candidate ranking {best.ranking_score:.2f} below "
-                f"threshold {AUTO_APPLY_RANKING_THRESHOLD:.2f}"
+                f"Best candidate match {top.match_score:.2f} below threshold "
+                f"{AUTO_APPLY_MATCH_THRESHOLD:.2f} (provider: {top.provider})"
             )
 
     # Single commit at the end of the happy path instead of several

@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -25,6 +26,8 @@ from app.schemas.book import (
 from app.services.candidates import apply_candidate, refresh_candidates, reject_candidate
 from app.services.lookup import lookup_book
 from app.services.organizer import build_output_path
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/books", tags=["books"])
 
@@ -444,7 +447,16 @@ async def lookup_book_endpoint(book_id: int, db: Session = Depends(get_db)):
     )
     api_key = api_key_setting.value if api_key_setting else None
 
-    results = await lookup_book(title, book.author, api_key, db)
+    try:
+        results = await lookup_book(title, book.author, api_key, db)
+    except Exception as e:
+        logger.warning(
+            "Lookup failed for book %s: %s", book_id, type(e).__name__, exc_info=True
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Lookup provider error ({type(e).__name__}). Try again shortly.",
+        ) from e
     return LookupResponse(results=results)
 
 
@@ -452,17 +464,40 @@ async def lookup_book_endpoint(book_id: int, db: Session = Depends(get_db)):
 async def search_book_endpoint(
     book_id: int, body: BookSearch, db: Session = Depends(get_db)
 ):
-    """Search online with a custom query for a book."""
+    """Search online with a custom query for a book.
+
+    Upstream lookup providers raise a variety of transient errors (Audible
+    token expiry, iTunes 503, Google Books rate-limit). Any uncaught
+    exception returns 500 which hides the real cause; instead we catch,
+    log the exception type + traceback, and return a 502 with a user-
+    actionable hint.
+    """
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
+
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Search query is empty")
+    if len(query) > 500:
+        raise HTTPException(status_code=400, detail="Search query too long")
 
     api_key_setting = (
         db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     )
     api_key = api_key_setting.value if api_key_setting else None
 
-    results = await lookup_book(body.query, None, api_key, db)
+    try:
+        results = await lookup_book(query, None, api_key, db)
+    except Exception as e:
+        logger.warning(
+            "Search failed for book %s, query %r: %s",
+            book_id, query, type(e).__name__, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Lookup provider error ({type(e).__name__}). Try again shortly.",
+        ) from e
     return LookupResponse(results=results)
 
 

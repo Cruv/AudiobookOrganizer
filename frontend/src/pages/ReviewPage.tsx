@@ -77,7 +77,14 @@ export default function ReviewPage() {
   const [filterConfirmed, setFilterConfirmed] = useState(searchParams.get('confirmed') || '');
   const [filterConfidence, setFilterConfidence] = useState(searchParams.get('confidence') || '');
 
-  // Sync state to URL params
+  // Sync state to URL params.
+  //
+  // setSearchParams is intentionally NOT in the deps: react-router can
+  // return a new function reference on every render, and including it
+  // here caused the effect to fire on every render, triggering URL
+  // updates that remounted the filter inputs and stole focus away
+  // mid-keystroke. We also compare the built params string to the
+  // current URL to skip no-op updates.
   useEffect(() => {
     const params = new URLSearchParams();
     if (scanId) params.set('scan_id', String(scanId));
@@ -87,8 +94,14 @@ export default function ReviewPage() {
     if (filterEdition) params.set('edition', filterEdition);
     if (filterConfirmed) params.set('confirmed', filterConfirmed);
     if (filterConfidence) params.set('confidence', filterConfidence);
-    setSearchParams(params, { replace: true });
-  }, [scanId, sort, page, debouncedSearch, filterEdition, filterConfirmed, filterConfidence, setSearchParams]);
+
+    const next = params.toString();
+    const current = searchParams.toString();
+    if (next !== current) {
+      setSearchParams(params, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanId, sort, page, debouncedSearch, filterEdition, filterConfirmed, filterConfidence]);
 
   // Debounce search
   useEffect(() => {
