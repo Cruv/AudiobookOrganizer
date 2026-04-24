@@ -347,21 +347,32 @@ async def search_itunes(
                     if len(deduped) == 1:
                         item_title = deduped[0]
                     elif len(deduped) == 2:
-                        # Classic "Title: Series" or "Series: Title" — we
-                        # assume the longer part is the series (books
-                        # rarely have longer titles than their series).
+                        # Two common conventions for single-colon titles:
+                        #   "Book Title: Series"       (most common)
+                        #   "Series: Book Title"       (seen with duplicated
+                        #                              title + series tail,
+                        #                              which dedupes down
+                        #                              to 2 parts)
+                        # Heuristic: if the FIRST part is contained in the
+                        # SECOND part (as a prefix), the first is the
+                        # title and the second is a longer form of the
+                        # series it belongs to. Otherwise default to the
+                        # "Book Title: Series" reading.
                         a, b = deduped
-                        if len(a) >= len(b):
-                            series_name, item_title = a, b
+                        if b.lower().startswith(a.lower()):
+                            item_title, series_name = a, b
                         else:
-                            series_name, item_title = b, a
+                            item_title, series_name = a, b
                     else:
-                        # 3+ parts after dedup: treat the LAST as the book
-                        # title and the rest (rejoined with ": ") as the
-                        # series. Matches how publishers stack names:
-                        # "World: Series: Book Title".
-                        item_title = deduped[-1]
-                        series_name = ": ".join(deduped[:-1])
+                        # 3+ parts after dedup: treat the FIRST as the
+                        # book title and join the rest with ": " as the
+                        # series. Matches the "Title: Series: Universe"
+                        # layout iTunes returns for franchise books
+                        # (e.g. "The Talon of Horus: Black Legion:
+                        # Warhammer 40,000" — title is the Talon, not
+                        # the Warhammer 40,000 universe).
+                        item_title = deduped[0]
+                        series_name = ": ".join(deduped[1:])
 
                 # Also check "Title (Series Name, Book N)" pattern
                 paren_match = re.search(
@@ -517,25 +528,63 @@ async def search_audible(
     return results
 
 
+async def _safe_provider(
+    name: str, coro,
+) -> list[LookupResult]:
+    """Await a provider coroutine and never let its exceptions escape.
+
+    Each search_* function has its own try/except inside the HTTP call,
+    but operations outside that block (auth file loading, DB cache
+    writes, cache schema mismatches after a model change) can still
+    raise. Isolating at the call site means one broken provider never
+     502s the whole lookup.
+    """
+    try:
+        return await coro
+    except Exception as e:
+        logger.warning(
+            "Lookup provider %s raised %s — returning empty result set",
+            name, type(e).__name__, exc_info=True,
+        )
+        return []
+
+
 async def lookup_book(
     title: str,
     author: str | None,
     api_key: str | None,
     db: Session,
 ) -> list[LookupResult]:
-    """Search all APIs and return deduplicated results, best first."""
-    audible_results = await search_audible(title, author, db)
-    google_results = await search_google_books(title, author, api_key, db)
-    ol_results = await search_openlibrary(title, author, db)
-    itunes_results = await search_itunes(title, author, db)
+    """Search all APIs and return deduplicated results, best first.
+
+    Each provider is awaited under _safe_provider so a crash in one
+    (expired Audible token, iTunes 503, corrupt cache row, etc.) gives
+    an empty list instead of failing the whole lookup. The user still
+    gets whatever the other providers returned.
+    """
+    audible_results = await _safe_provider(
+        "audible", search_audible(title, author, db)
+    )
+    google_results = await _safe_provider(
+        "google_books", search_google_books(title, author, api_key, db)
+    )
+    ol_results = await _safe_provider(
+        "openlibrary", search_openlibrary(title, author, db)
+    )
+    itunes_results = await _safe_provider(
+        "itunes", search_itunes(title, author, db)
+    )
 
     # Audible first so it wins dedup with highest confidence
     all_results = audible_results + itunes_results + google_results + ol_results
 
     # Deduplicate by title+author similarity
-    deduped = _deduplicate_results(all_results)
+    try:
+        deduped = _deduplicate_results(all_results)
+    except Exception:
+        logger.warning("Dedup failed, returning raw merged results", exc_info=True)
+        deduped = all_results
 
-    # Sort by confidence descending
     deduped.sort(key=lambda r: r.confidence, reverse=True)
     return deduped
 
@@ -599,12 +648,30 @@ def _cache_key(query: str, provider: str) -> str:
 
 
 def _get_cached(query: str, provider: str, db: Session) -> list[LookupResult] | None:
-    """Get cached lookup results if available and not expired."""
+    """Get cached lookup results if available and not expired.
+
+    If a cache row exists but can't be decoded (JSON malformed, or the
+    LookupResult schema has changed since the row was written), treat
+    it as a miss and discard the row instead of letting the exception
+    escape — that was the root cause of a 502 after schema additions.
+    """
     key = _cache_key(query, provider)
     cached = db.query(LookupCache).filter(LookupCache.query_hash == key).first()
     if cached and cached.expires_at > datetime.now(timezone.utc):
-        data = json.loads(cached.response_json)
-        return [LookupResult(**item) for item in data]
+        try:
+            data = json.loads(cached.response_json)
+            return [LookupResult(**item) for item in data]
+        except Exception as e:
+            logger.warning(
+                "Discarding unreadable %s cache row (%s): %s",
+                provider, key[:12], type(e).__name__,
+            )
+            try:
+                db.delete(cached)
+                db.commit()
+            except Exception:
+                db.rollback()
+            return None
     if cached and cached.expires_at <= datetime.now(timezone.utc):
         db.delete(cached)
         db.commit()

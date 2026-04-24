@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Check,
@@ -35,8 +35,9 @@ import BookEditModal from '@/components/BookEditModal';
 import SearchModal from '@/components/SearchModal';
 import CandidatesModal from '@/components/CandidatesModal';
 import BulkEditModal from '@/components/BulkEditModal';
+import SearchField from '@/components/SearchField';
 import { useToast } from '@/components/Toast';
-import { Button, Card, Input, Select, EmptyState, PageSkeleton } from '@/components/ui';
+import { Button, Card, Select, EmptyState, PageSkeleton } from '@/components/ui';
 import type { Book } from '@/types';
 
 const PAGE_SIZE = 50;
@@ -73,31 +74,21 @@ export default function ReviewPage() {
 
   const [sort, setSort] = useState(searchParams.get('sort') || 'confidence');
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
-  // debouncedSearch is what drives the query + URL sync. We intentionally
-  // don't keep the raw input value in React state — the <input> is
-  // uncontrolled (defaultValue only) so it never re-renders on keystroke,
-  // which guarantees the caret stays where the user put it even on slow
-  // machines rendering large book lists.
-  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get('search') || '');
+  // Initial search value is captured ONCE from the URL so the memoized
+  // SearchField's `initialValue` prop never changes identity. After
+  // that, all search updates flow through debouncedSearch only.
+  const [initialSearchValue] = useState(() => searchParams.get('search') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(initialSearchValue);
   const [filterEdition, setFilterEdition] = useState(searchParams.get('edition') || '');
   const [filterConfirmed, setFilterConfirmed] = useState(searchParams.get('confirmed') || '');
   const [filterConfidence, setFilterConfidence] = useState(searchParams.get('confidence') || '');
 
-  // Debounce timer for the uncontrolled search field.
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    if (searchDebounceRef.current) {
-      clearTimeout(searchDebounceRef.current);
-    }
-    searchDebounceRef.current = setTimeout(() => {
-      setDebouncedSearch(value);
-    }, 300);
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    };
+  // Stable handler for the memoized SearchField. Depends on nothing so
+  // it has the same reference across every render; combined with the
+  // stable initialSearchValue, the SearchField's props never change
+  // identity, so React.memo prevents it from re-rendering at all.
+  const handleDebouncedSearch = useCallback((value: string) => {
+    setDebouncedSearch(value);
   }, []);
 
   // Sync state to URL params.
@@ -281,17 +272,17 @@ export default function ReviewPage() {
       <Card className="mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="sm:col-span-2 lg:col-span-1">
-            {/* Uncontrolled input: defaultValue seeds from URL once,
-                onChange pushes debounced updates to parent state. The
-                <input> never receives a new `value` prop on keystroke,
-                so React never re-renders the DOM node and focus stays
-                put even while the book list rerenders below. */}
-            <Input
+            {/* Memoized + stable-prop SearchField: React.memo + a
+                useState initializer for initialValue + useCallback for
+                the handler means this component never re-renders after
+                mount, no matter what state the rest of the page
+                churns through. That guarantees the <input> DOM node
+                is never touched by React and focus stays put. */}
+            <SearchField
               label="Search"
-              type="text"
-              defaultValue={searchParams.get('search') || ''}
-              onChange={handleSearchChange}
               placeholder="Title or author..."
+              initialValue={initialSearchValue}
+              onDebouncedChange={handleDebouncedSearch}
             />
           </div>
           <Select

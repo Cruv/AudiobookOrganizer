@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.10.1"
 
 app = FastAPI(
     title="Audiobook Organizer",
