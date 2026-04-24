@@ -96,17 +96,21 @@ export default function BulkEditModal({ bookIds, onClose }: Props) {
           placeholder="e.g. Graphic Audio"
         />
 
-        <Select
-          label="Also..."
-          value={flags}
-          onChange={(e) => setFlags(e.target.value as 'none' | 'confirm' | 'lock')}
-          options={[
-            { value: 'none', label: 'Nothing extra' },
-            { value: 'confirm', label: 'Mark as confirmed' },
-            { value: 'lock', label: 'Lock (freeze metadata)' },
-          ]}
-          hint="Flags applied alongside field edits."
-        />
+        <div>
+          <Select
+            label="Also..."
+            value={flags}
+            onChange={(e) => setFlags(e.target.value as 'none' | 'confirm' | 'lock')}
+            options={[
+              { value: 'none', label: 'Nothing extra' },
+              { value: 'confirm', label: 'Mark as confirmed' },
+              { value: 'lock', label: 'Lock (freeze metadata)' },
+            ]}
+          />
+          <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+            Flags applied alongside field edits.
+          </p>
+        </div>
 
         <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
           <strong>Tip:</strong> leave a field empty to skip it. Fields with

@@ -289,10 +289,8 @@ export default function ReviewPage() {
       {selectedIds.size > 0 && (
         <Card
           className="mb-4"
-          style={{
-            background: 'var(--color-surface-elevated, var(--color-surface))',
-            borderColor: 'var(--color-primary)',
-          }}
+          borderColor="var(--color-primary)"
+          borderWidth="2px"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-sm">
