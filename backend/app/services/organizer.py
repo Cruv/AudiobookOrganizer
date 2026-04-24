@@ -22,8 +22,8 @@ from app.models.book import Book
 logger = logging.getLogger(__name__)
 
 
-# Characters illegal in file/folder names
-ILLEGAL_CHARS = re.compile(r'[\\/:*?"<>|]')
+# Characters that filesystems reject and MUST be replaced.
+ILLEGAL_CHARS = re.compile(r'[\\/*?"<>|]')
 MAX_COMPONENT_LENGTH = 200
 
 # Suffix applied to in-progress copies before atomic rename.
@@ -95,12 +95,32 @@ def cleanup_orphan_staging_files(output_root: str) -> int:
 
 
 def sanitize_path_component(name: str) -> str:
-    """Remove illegal characters and limit length for a path component."""
-    sanitized = ILLEGAL_CHARS.sub("_", name)
-    sanitized = sanitized.strip(". ")
-    if len(sanitized) > MAX_COMPONENT_LENGTH:
-        sanitized = sanitized[:MAX_COMPONENT_LENGTH].rstrip(". ")
-    return sanitized
+    r"""Normalize a string for safe, readable use as a path component.
+
+    Transformations, in order:
+      1. Colons → " - "   (e.g. "Black Legion: Warhammer 40,000"
+                             → "Black Legion - Warhammer 40,000")
+         Filesystems on Windows reject `:`, and even where it's legal
+         (Linux), media servers often handle it poorly. A spaced dash
+         reads naturally in both folder and file names.
+      2. Commas stripped. Cosmetic preference — "40,000" becomes
+         "40000", which matches how Audiobookshelf / Plex name things.
+      3. Remaining filesystem-illegal chars (`\ / * ? " < > |`) → `_`.
+      4. Collapse whitespace runs and trim trailing spaces / dots
+         (Windows refuses names ending in "." or " ").
+      5. Truncate to MAX_COMPONENT_LENGTH.
+    """
+    s = name.replace(":", " - ")
+    s = s.replace(",", "")
+    s = ILLEGAL_CHARS.sub("_", s)
+    # Collapse runs of whitespace and adjacent dashes introduced by the
+    # substitutions above.
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"(?:\s*-\s*){2,}", " - ", s)
+    s = s.strip(". ")
+    if len(s) > MAX_COMPONENT_LENGTH:
+        s = s[:MAX_COMPONENT_LENGTH].rstrip(". ")
+    return s
 
 
 def build_output_path(book: Book, pattern: str, output_root: str) -> str:

@@ -332,13 +332,36 @@ async def search_itunes(
                 if series_match:
                     series_pos = series_match.group(1)
                     clean_title = item_title[: series_match.start()].strip(" -–—:,")
-                    # Check if there's a colon-separated series
-                    colon_split = clean_title.split(":")
-                    if len(colon_split) == 2:
-                        series_name = colon_split[0].strip()
-                        item_title = colon_split[1].strip()
+
+                    # Split on colon and drop any adjacent duplicates —
+                    # iTunes sometimes returns collectionName values like
+                    # "Black Legion: Black Legion: Warhammer 40,000" where
+                    # the book title appears both on its own and as the
+                    # prefix of the series title.
+                    parts = [p.strip() for p in clean_title.split(":") if p.strip()]
+                    deduped: list[str] = []
+                    for p in parts:
+                        if not deduped or deduped[-1].lower() != p.lower():
+                            deduped.append(p)
+
+                    if len(deduped) == 1:
+                        item_title = deduped[0]
+                    elif len(deduped) == 2:
+                        # Classic "Title: Series" or "Series: Title" — we
+                        # assume the longer part is the series (books
+                        # rarely have longer titles than their series).
+                        a, b = deduped
+                        if len(a) >= len(b):
+                            series_name, item_title = a, b
+                        else:
+                            series_name, item_title = b, a
                     else:
-                        item_title = clean_title
+                        # 3+ parts after dedup: treat the LAST as the book
+                        # title and the rest (rejoined with ": ") as the
+                        # series. Matches how publishers stack names:
+                        # "World: Series: Book Title".
+                        item_title = deduped[-1]
+                        series_name = ": ".join(deduped[:-1])
 
                 # Also check "Title (Series Name, Book N)" pattern
                 paren_match = re.search(

@@ -1,6 +1,6 @@
 [project]
 name = "audiobook-organizer"
-version = "1.9.3"
+version = "1.9.4"
 description = "Web-based audiobook organizer for Chaptarr-compatible folder structures"
 requires-python = ">=3.11"
 dependencies = [

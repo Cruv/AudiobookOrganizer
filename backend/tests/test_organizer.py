@@ -6,8 +6,29 @@ from app.services.organizer import build_output_path, sanitize_path_component
 
 
 class TestSanitizePathComponent:
-    def test_removes_illegal_chars(self):
-        assert sanitize_path_component('Book: The "Test"') == "Book_ The _Test_"
+    def test_replaces_filesystem_illegal_chars(self):
+        # Backslashes, slashes, quotes etc. become underscores.
+        assert sanitize_path_component('Book "Test" / Other') == "Book _Test_ _ Other"
+
+    def test_colon_becomes_spaced_dash(self):
+        # Colons are nominally legal on Linux but break Windows and confuse
+        # media servers; we render them as " - " for readability.
+        assert sanitize_path_component("Black Legion: Warhammer") == "Black Legion - Warhammer"
+
+    def test_commas_are_stripped(self):
+        # User preference — "40,000" reads as "40000" in paths.
+        assert sanitize_path_component("Warhammer 40,000") == "Warhammer 40000"
+
+    def test_combined_colon_and_comma(self):
+        # The motivating example from v1.9.3 — an iTunes match with both.
+        assert (
+            sanitize_path_component("Black Legion: Warhammer 40,000")
+            == "Black Legion - Warhammer 40000"
+        )
+
+    def test_dedupes_adjacent_dashes_from_substitutions(self):
+        # "Foo - : Bar" would otherwise produce "Foo -  -  Bar".
+        assert sanitize_path_component("Foo - : Bar") == "Foo - Bar"
 
     def test_strips_dots_and_spaces(self):
         assert sanitize_path_component("  test. ") == "test"
