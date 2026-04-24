@@ -32,6 +32,7 @@ class Book(Base):
     purge_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="not_purged"
     )
+    lookup_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )

@@ -12,12 +12,26 @@ logger = logging.getLogger(__name__)
 
 
 def verify_book(book: Book) -> PurgeVerifyItem:
-    """Verify that all destination files exist and match original sizes."""
+    """Verify that all destination files exist and match original sizes.
+
+    If the original path still exists, cross-check dest size against a
+    fresh read of the original's on-disk size rather than trusting the
+    stored BookFile.file_size (which can be stale or None).
+    """
     missing_files: list[str] = []
     total_size = 0
 
     for bf in book.files:
-        total_size += bf.file_size
+        # Guard: file_size can legitimately be None on older DB rows.
+        original_size = bf.file_size or 0
+        if os.path.exists(bf.original_path):
+            try:
+                fresh_original_size = os.path.getsize(bf.original_path)
+                original_size = fresh_original_size
+            except OSError:
+                pass
+        total_size += original_size
+
         if bf.copy_status != "copied":
             missing_files.append(f"{bf.filename}: not copied (status={bf.copy_status})")
             continue
@@ -27,10 +41,14 @@ def verify_book(book: Book) -> PurgeVerifyItem:
         if not os.path.exists(bf.destination_path):
             missing_files.append(f"{bf.filename}: destination file missing")
             continue
-        dest_size = os.path.getsize(bf.destination_path)
-        if dest_size != bf.file_size:
+        try:
+            dest_size = os.path.getsize(bf.destination_path)
+        except OSError as e:
+            missing_files.append(f"{bf.filename}: cannot stat destination: {e}")
+            continue
+        if original_size and dest_size != original_size:
             missing_files.append(
-                f"{bf.filename}: size mismatch (original={bf.file_size}, dest={dest_size})"
+                f"{bf.filename}: size mismatch (original={original_size}, dest={dest_size})"
             )
 
     return PurgeVerifyItem(

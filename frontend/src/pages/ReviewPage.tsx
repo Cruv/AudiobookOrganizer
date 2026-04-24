@@ -11,6 +11,7 @@ import {
   FolderSearch,
   ChevronLeft,
   ChevronRight,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   useBooks,
@@ -327,6 +328,14 @@ export default function ReviewPage() {
                   {book.projected_path || '\u2014'}
                 </span>
               </div>
+              {book.lookup_error && (
+                <div className="flex gap-2 items-start" style={{ color: 'var(--color-warning)' }}>
+                  <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+                  <span className="truncate" title={book.lookup_error}>
+                    Lookup: {book.lookup_error}
+                  </span>
+                </div>
+              )}
             </div>
           </Card>
         ))}

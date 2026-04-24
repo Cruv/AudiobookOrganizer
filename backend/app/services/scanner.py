@@ -34,7 +34,11 @@ MAX_DEPTH = 6
 MULTI_PART_LEAF_PATTERN = re.compile(
     r"^(?:Part|Pt|Disc|CD|Disk)\s*\d+", re.IGNORECASE
 )
-AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 1.0  # Look up ALL books online (no parsed book reaches 1.0)
+# Local parses with confidence >= this skip the (slow) online lookup phase.
+# Online provider confidence is capped at 0.95, so 0.90 is the right bar:
+# strong-but-not-perfect local parses still get a chance to be improved upstream.
+AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 0.90
+# Minimum auto_match_score before a lookup result is automatically applied.
 AUTO_APPLY_MATCH_THRESHOLD = 0.85
 
 
@@ -90,16 +94,27 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
         db.commit()
         _group_multipart_books(scan, db)
 
+        # Carry forward manual edits / confirmations from prior scans
+        # of folders at the same path (basic re-scan idempotency).
+        scan.status_detail = "Carrying forward manual edits..."
+        db.commit()
+        _carry_forward_manual_edits(scan, db)
+
         # Detect duplicate books (same title+author, different paths)
         scan.status_detail = "Checking for duplicates..."
         db.commit()
         _detect_duplicates(scan, db)
 
-        # Refresh lookup list after grouping (some books may have been merged)
+        # Refresh lookup list after grouping and carry-forward. Confirmed
+        # books (is_confirmed=True) are skipped — user already reviewed them.
         books_for_lookup = (
             db.query(Book)
             .join(ScannedFolder)
-            .filter(ScannedFolder.scan_id == scan.id, Book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD)
+            .filter(
+                ScannedFolder.scan_id == scan.id,
+                Book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD,
+                Book.is_confirmed.is_(False),
+            )
             .all()
         )
 
@@ -128,7 +143,11 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
 
 
 async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None:
-    """Auto-lookup metadata for all books and apply best matches."""
+    """Auto-lookup metadata for all books and apply best matches.
+
+    Records any per-book lookup failure as book.lookup_error so the Review
+    page can surface it to the user rather than silently losing the book.
+    """
     from app.services.lookup import lookup_book
     from app.services.parser import clean_narrator, clean_query
 
@@ -138,17 +157,25 @@ async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None
     total = len(books)
     for idx, book in enumerate(books):
         try:
+            # Clear any stale error from a previous run
+            book.lookup_error = None
+
             query = clean_query(book.title, book.author)
             if not query or len(query) < 3:
+                book.lookup_error = "Query too short to look up"
+                db.commit()
                 continue
 
             scan.status_detail = f"Looking up {idx + 1}/{total}: {query[:50]}"
             db.commit()
 
-            logger.info(f"Auto-lookup {idx + 1}/{total}: {query}")
+            logger.info("Auto-lookup %d/%d: %s", idx + 1, total, query)
 
             results = await lookup_book(query, book.author, api_key, db)
             if not results:
+                book.lookup_error = "No matches from any provider"
+                db.commit()
+                await asyncio.sleep(0.3)
                 continue
 
             # Score each result against parsed data
@@ -158,12 +185,20 @@ async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None
                 series=book.series,
                 series_position=book.series_position,
                 year=book.year,
+                narrator=book.narrator,
             )
 
             best_score = 0.0
             best_result = None
             for result in results:
-                score = auto_match_score(parsed, result.title, result.author)
+                score = auto_match_score(
+                    parsed,
+                    result.title,
+                    result.author,
+                    result_series=result.series,
+                    result_year=result.year,
+                    result_narrator=result.narrator,
+                )
                 if score > best_score:
                     best_score = score
                     best_result = result
@@ -180,19 +215,32 @@ async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None
                     book.series_position = best_result.series_position
                 if best_result.year and not book.year:
                     book.year = best_result.year
-                # Apply narrator from online source if we don't have one
                 if best_result.narrator and not book.narrator:
                     book.narrator = clean_narrator(best_result.narrator, book.edition)
-                # Preserve edition — online APIs don't know about GA editions
                 book.source = f"auto:{best_result.provider}"
-                # Use the higher of local confidence or online provider confidence
                 book.confidence = max(book.confidence, min(best_result.confidence, 0.95))
-                db.commit()
+            else:
+                # Don't apply, but record why for user visibility
+                book.lookup_error = (
+                    f"Best match score {best_score:.2f} below threshold "
+                    f"{AUTO_APPLY_MATCH_THRESHOLD:.2f}"
+                )
+            db.commit()
 
-            # Rate limit: small delay between books to avoid API throttling
             await asyncio.sleep(0.3)
 
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "Auto-lookup failed for book %s: %s",
+                book.id,
+                type(e).__name__,
+                exc_info=True,
+            )
+            try:
+                book.lookup_error = f"{type(e).__name__}: {str(e)[:200]}"
+                db.commit()
+            except Exception:
+                db.rollback()
             continue
 
 
@@ -329,10 +377,16 @@ def _group_multipart_books(scan: Scan, db: Session) -> None:
     Finds sibling folders like "Part 01", "Part 02" etc. under the same
     parent directory and merges them: moves all BookFiles to the first
     Book, then deletes the duplicate Book records.
+
+    Siblings are only merged if they also share a fuzzy title/author —
+    prevents accidentally merging two unrelated multi-part books that
+    happen to share a parent directory.
     """
     from collections import defaultdict
 
     from sqlalchemy.orm import joinedload
+
+    from app.services.parser import similarity
 
     books = (
         db.query(Book)
@@ -358,34 +412,118 @@ def _group_multipart_books(scan: Scan, db: Session) -> None:
         if len(group_books) < 2:
             continue
 
-        # Sort by folder name for consistent ordering (Part 01, Part 02, ...)
         group_books.sort(key=lambda b: b.scanned_folder.folder_name)
 
-        primary = group_books[0]
-        merged_count = 0
+        # Cluster siblings by content similarity (title + author) so two
+        # different multi-part books under the same parent don't get merged.
+        clusters: list[list[Book]] = []
+        for book in group_books:
+            placed = False
+            for cluster in clusters:
+                head = cluster[0]
+                title_sim = similarity(book.title, head.title)
+                author_sim = similarity(book.author, head.author) if (book.author and head.author) else 1.0
+                # Require strong title match; author match if both have one.
+                if title_sim >= 0.80 and author_sim >= 0.70:
+                    cluster.append(book)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append([book])
 
-        for secondary in group_books[1:]:
-            # Move all files from secondary to primary
-            for bf in secondary.files:
-                bf.book_id = primary.id
-            db.flush()
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
 
-            # Delete secondary book (cascade doesn't apply since we moved files)
-            secondary_folder = secondary.scanned_folder
-            db.delete(secondary)
-            if secondary_folder:
-                secondary_folder.status = "merged"
-            merged_count += 1
+            primary = cluster[0]
+            for secondary in cluster[1:]:
+                for bf in secondary.files:
+                    bf.book_id = primary.id
+                db.flush()
 
-        logger.info(
-            "Grouped %d parts into '%s' by %s (parent: %s)",
-            len(group_books),
-            primary.title,
-            primary.author,
-            os.path.basename(parent_dir),
-        )
+                secondary_folder = secondary.scanned_folder
+                db.delete(secondary)
+                if secondary_folder:
+                    secondary_folder.status = "merged"
+
+            logger.info(
+                "Grouped %d parts into '%s' by %s (parent: %s)",
+                len(cluster),
+                primary.title,
+                primary.author,
+                os.path.basename(parent_dir),
+            )
 
     db.commit()
+
+
+def _carry_forward_manual_edits(scan: Scan, db: Session) -> None:
+    """Carry is_confirmed + manual edits from the newest prior Book at the
+    same folder_path forward into this scan.
+
+    Prior scans of the same directory produce their own Book rows. Without
+    this pass, a user who manually fixed 50 books would lose those edits
+    on the next scan. We look up the most recent Book for each folder_path
+    in this scan (excluding books in *this* scan) and, if its source
+    indicates user intervention, copy its fields over.
+    """
+    from sqlalchemy.orm import joinedload
+
+    current = (
+        db.query(Book)
+        .join(ScannedFolder)
+        .options(joinedload(Book.scanned_folder))
+        .filter(ScannedFolder.scan_id == scan.id)
+        .all()
+    )
+
+    carried = 0
+    for book in current:
+        if not book.scanned_folder:
+            continue
+        folder_path = book.scanned_folder.folder_path
+
+        prior = (
+            db.query(Book)
+            .join(ScannedFolder)
+            .filter(
+                ScannedFolder.folder_path == folder_path,
+                ScannedFolder.scan_id != scan.id,
+            )
+            .order_by(Book.updated_at.desc())
+            .first()
+        )
+        if not prior:
+            continue
+
+        # Only carry forward if the user actually touched this book.
+        user_touched = prior.is_confirmed or prior.source in ("manual", "user")
+        if not user_touched:
+            continue
+
+        # Preserve the user's work.
+        if prior.title:
+            book.title = prior.title
+        if prior.author:
+            book.author = prior.author
+        if prior.series:
+            book.series = prior.series
+        if prior.series_position:
+            book.series_position = prior.series_position
+        if prior.year:
+            book.year = prior.year
+        if prior.narrator:
+            book.narrator = prior.narrator
+        if prior.edition:
+            book.edition = prior.edition
+        book.is_confirmed = prior.is_confirmed
+        book.source = prior.source
+        book.confidence = max(book.confidence, prior.confidence)
+        carried += 1
+
+    if carried:
+        db.commit()
+        logger.info("Carried forward manual edits for %d book(s) from prior scans", carried)
 
 
 def _detect_duplicates(scan: Scan, db: Session) -> None:

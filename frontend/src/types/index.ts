@@ -40,6 +40,7 @@ export interface Book {
   output_path: string | null;
   organize_status: 'pending' | 'copying' | 'copied' | 'failed';
   purge_status: 'not_purged' | 'purged';
+  lookup_error: string | null;
   folder_path: string | null;
   folder_name: string | null;
   projected_path: string | null;

@@ -89,3 +89,27 @@ class TestBuildOutputPath:
         )
         assert "()" not in result
         assert "[]" not in result
+
+    def test_missing_author_uses_unknown_fallback(self):
+        """Books without an author should bucket into Unknown Author, not flatten to root."""
+        book = self.FakeBook(title="Orphan Book", author=None)
+        result = build_output_path(book, "{Author}/{Title}", "/output")
+        # Must NOT be flat at root level — must be nested under Unknown Author
+        assert "Unknown Author" in result
+        assert "Orphan Book" in result
+
+    def test_missing_title_uses_unknown_title_fallback(self):
+        """Books without a title should bucket into Unknown Title."""
+        book = self.FakeBook(title=None, author="Some Author")
+        result = build_output_path(book, "{Author}/{Title}", "/output")
+        assert "Some Author" in result
+        assert "Unknown Title" in result
+
+    def test_optional_tokens_still_collapse(self):
+        """Series, year etc. should still be collapsed when empty, not substituted."""
+        book = self.FakeBook(title="T", author="A")
+        result = build_output_path(book, "{Author}/{Series}/{Year}/{Title}", "/output")
+        # Series and Year segments should collapse, not become "Unknown Series"
+        assert "Unknown Series" not in result
+        assert "Unknown Year" not in result
+        assert result.endswith("T")

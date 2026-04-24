@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -39,6 +39,12 @@ class ScannedFolder(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+    # A folder should only appear once within a given scan. Prevents
+    # symlink loops or processing bugs from creating duplicate rows.
+    __table_args__ = (
+        UniqueConstraint("scan_id", "folder_path", name="uq_scanned_folder_scan_path"),
     )
 
     scan: Mapped["Scan"] = relationship(back_populates="folders")

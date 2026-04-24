@@ -7,6 +7,8 @@ title, author, series, series position, and year from messy folder names.
 import re
 from dataclasses import dataclass
 
+from rapidfuzz import fuzz
+
 
 @dataclass
 class ParsedMetadata:
@@ -724,47 +726,120 @@ def clean_query(title: str | None, author: str | None = None) -> str:
     return " ".join(parts)
 
 
-def fuzzy_match(a: str, b: str) -> bool:
-    """Check if two strings are similar using normalized comparison."""
-    norm_a = re.sub(r"[^a-z0-9]", "", a.lower())
-    norm_b = re.sub(r"[^a-z0-9]", "", b.lower())
-    if not norm_a or not norm_b:
+def _normalize_for_match(s: str) -> str:
+    """Normalize a string for matching: lowercase, strip articles, collapse whitespace."""
+    if not s:
+        return ""
+    normalized = s.lower().strip()
+    # Strip leading articles (the, a, an) — "The Final Empire" vs "Final Empire" should match
+    normalized = re.sub(r"^(?:the|a|an)\s+", "", normalized)
+    # Collapse whitespace and punctuation runs
+    normalized = re.sub(r"[\s_.\-–—:;,]+", " ", normalized).strip()
+    return normalized
+
+
+def similarity(a: str | None, b: str | None) -> float:
+    """Return a 0.0–1.0 similarity score between two strings.
+
+    Uses rapidfuzz token_set_ratio which handles word reordering and
+    partial overlap. Normalizes case, articles, and punctuation first.
+    """
+    if not a or not b:
+        return 0.0
+    na = _normalize_for_match(a)
+    nb = _normalize_for_match(b)
+    if not na or not nb:
+        return 0.0
+    if na == nb:
+        return 1.0
+    # token_set_ratio handles word reordering and extra/missing words well
+    return fuzz.token_set_ratio(na, nb) / 100.0
+
+
+def fuzzy_match(a: str | None, b: str | None, threshold: float = 0.80) -> bool:
+    """Binary check: are these two strings similar enough to be considered the same?
+
+    Default threshold 0.80 matches the strictness of the old handrolled
+    character-ratio check but is order-aware (fixes false positives where
+    "starwars" and "starwhores" scored the same character ratio).
+    """
+    if not a or not b:
         return False
-    # Check containment
-    if norm_a in norm_b or norm_b in norm_a:
-        return True
-    # Levenshtein-like: check if edit distance is small relative to length
-    shorter, longer = (norm_a, norm_b) if len(norm_a) <= len(norm_b) else (norm_b, norm_a)
-    if len(shorter) < 3:
-        return shorter == longer
-    # Check common character ratio
-    common = sum(1 for c in shorter if c in longer)
-    ratio = common / len(shorter)
-    if ratio >= 0.8:
-        # Also check prefix overlap
-        prefix_len = 0
-        for ca, cb in zip(norm_a, norm_b):
-            if ca == cb:
-                prefix_len += 1
-            else:
-                break
-        return prefix_len >= min(len(norm_a), len(norm_b)) * 0.5
-    return False
+    return similarity(a, b) >= threshold
 
 
-def auto_match_score(parsed: ParsedMetadata, result_title: str | None, result_author: str | None) -> float:
-    """Score how well a lookup result matches parsed metadata. 0.0 to 1.0."""
+def _year_proximity(a: str | None, b: str | None) -> float:
+    """Score year similarity: 1.0 if equal, 0.5 if within 1 year, 0.0 otherwise."""
+    if not a or not b:
+        return 0.0
+    try:
+        ya, yb = int(re.match(r"\d{4}", a).group()), int(re.match(r"\d{4}", b).group())
+    except (AttributeError, ValueError):
+        return 0.0
+    diff = abs(ya - yb)
+    if diff == 0:
+        return 1.0
+    if diff == 1:
+        return 0.5
+    return 0.0
+
+
+# Weights for each field when scoring a lookup result against parsed data.
+# Title dominates, author is the strong secondary, series/year/narrator break ties.
+_MATCH_WEIGHTS = {
+    "title": 0.50,
+    "author": 0.30,
+    "series": 0.10,
+    "year": 0.05,
+    "narrator": 0.05,
+}
+
+
+def auto_match_score(
+    parsed: ParsedMetadata,
+    result_title: str | None,
+    result_author: str | None,
+    result_series: str | None = None,
+    result_year: str | None = None,
+    result_narrator: str | None = None,
+) -> float:
+    """Score how well a lookup result matches parsed metadata, 0.0 to 1.0.
+
+    Weighted, partial-credit: each field contributes its weight times its
+    similarity. Weights of fields that are missing on BOTH sides are
+    redistributed proportionally to the remaining fields so a book with
+    no series/year/narrator can still reach 1.0 on title+author alone.
+    """
+    field_scores: dict[str, float | None] = {}
+
+    # Title and author are always expected
+    field_scores["title"] = similarity(parsed.title, result_title) if (parsed.title and result_title) else None
+    field_scores["author"] = similarity(parsed.author, result_author) if (parsed.author and result_author) else None
+    field_scores["series"] = similarity(parsed.series, result_series) if (parsed.series and result_series) else None
+    field_scores["year"] = _year_proximity(parsed.year, result_year) if (parsed.year and result_year) else None
+    field_scores["narrator"] = similarity(parsed.narrator, result_narrator) if (parsed.narrator and result_narrator) else None
+
+    # Redistribute weight from fields missing on both sides
+    active_weight = sum(w for k, w in _MATCH_WEIGHTS.items() if field_scores[k] is not None)
+    if active_weight == 0:
+        return 0.0
+
     score = 0.0
-    if parsed.title and result_title:
-        if fuzzy_match(parsed.title, result_title):
-            score += 0.6
-    if parsed.author and result_author:
-        if fuzzy_match(parsed.author, result_author):
-            score += 0.4
-    elif not parsed.author and result_author:
-        # No parsed author - partial credit if title matched
-        score += 0.1
-    return score
+    for field, weight in _MATCH_WEIGHTS.items():
+        s = field_scores[field]
+        if s is None:
+            continue
+        score += (weight / active_weight) * s
+
+    # Penalty when parsed side has a value but result side doesn't (missing data):
+    # Shouldn't fully disqualify but should dent confidence so a richer result wins.
+    for field in ("title", "author"):
+        parsed_val = getattr(parsed, field, None)
+        result_val = {"title": result_title, "author": result_author}[field]
+        if parsed_val and not result_val:
+            score *= 0.85
+
+    return min(score, 1.0)
 
 
 def clean_narrator(narrator: str | None, edition: str | None = None) -> str | None:

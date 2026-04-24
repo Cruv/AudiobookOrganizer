@@ -164,8 +164,28 @@ def read_folder_tags(folder_path: str) -> dict[str, str | None]:
         else:
             consensus[field] = None
 
-    # For title, use the album tag (individual titles are chapter names)
+    # Album tag usually holds the book title; individual file titles are
+    # chapter names. But when album is missing, fall back to the most
+    # common per-file title tag with chapter/track boilerplate stripped —
+    # otherwise books without an album tag contribute nothing from tags.
     consensus["title"] = consensus.get("album")
+    if not consensus["title"]:
+        stripped_titles: list[str] = []
+        for t in all_tags:
+            title_val = t.get("title")
+            if not title_val:
+                continue
+            cleaned = re.sub(
+                r"^(?:chapter|track|part|disc|cd)\s*\d+\s*[-–—:.]*\s*",
+                "",
+                title_val,
+                flags=re.IGNORECASE,
+            )
+            cleaned = re.sub(r"^\s*\d+\s*[-–—:.]+\s*", "", cleaned).strip()
+            if cleaned and len(cleaned) >= 3:
+                stripped_titles.append(cleaned)
+        if stripped_titles:
+            consensus["title"] = Counter(stripped_titles).most_common(1)[0][0]
 
     # Track number: not useful for consensus
     consensus["track"] = all_tags[0].get("track") if all_tags else None

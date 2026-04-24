@@ -38,6 +38,7 @@ class BookResponse(BaseModel):
     output_path: str | None
     organize_status: str
     purge_status: str
+    lookup_error: str | None = None
     folder_path: str | None = None
     folder_name: str | None = None
     projected_path: str | None = None

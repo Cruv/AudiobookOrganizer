@@ -1,8 +1,10 @@
 """Online metadata lookup via Google Books, OpenLibrary, and iTunes APIs."""
 
+import asyncio
 import hashlib
 import json
 import logging
+import random
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -17,6 +19,74 @@ logger = logging.getLogger(__name__)
 
 
 CACHE_DURATION_DAYS = 30
+
+# Retry settings for external HTTP providers.
+_HTTP_TIMEOUT = 10.0
+_HTTP_MAX_ATTEMPTS = 3
+_HTTP_BASE_BACKOFF = 0.5  # seconds; jittered exponential
+
+
+async def _http_get_json(
+    url: str,
+    params: dict[str, str],
+    provider: str,
+) -> dict | None:
+    """GET url with retry+backoff. Returns parsed JSON or None on failure.
+
+    Retries on 429 (rate limit), 5xx, and network/timeout errors. 4xx
+    other than 429 fails fast — they're client errors, retrying won't help.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+                resp = await client.get(url, params=params)
+
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # Respect Retry-After when present
+                delay = _HTTP_BASE_BACKOFF * (2 ** (attempt - 1))
+                try:
+                    retry_after = float(resp.headers.get("retry-after", "0"))
+                    delay = max(delay, retry_after)
+                except ValueError:
+                    pass
+                delay += random.uniform(0, 0.3)  # jitter
+                if attempt < _HTTP_MAX_ATTEMPTS:
+                    logger.info(
+                        "%s returned %d, retrying in %.1fs (attempt %d/%d)",
+                        provider, resp.status_code, delay, attempt, _HTTP_MAX_ATTEMPTS,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                resp.raise_for_status()
+
+            resp.raise_for_status()
+            return resp.json()
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            last_exc = e
+            if attempt < _HTTP_MAX_ATTEMPTS:
+                delay = _HTTP_BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.3)
+                logger.info(
+                    "%s %s, retrying in %.1fs (attempt %d/%d)",
+                    provider, type(e).__name__, delay, attempt, _HTTP_MAX_ATTEMPTS,
+                )
+                await asyncio.sleep(delay)
+                continue
+            logger.warning("%s failed after %d attempts: %s", provider, attempt, type(e).__name__)
+            return None
+        except httpx.HTTPStatusError as e:
+            # 4xx other than 429: don't retry
+            logger.warning("%s returned %s", provider, e.response.status_code)
+            return None
+        except Exception as e:
+            last_exc = e
+            logger.warning("%s unexpected error: %s", provider, type(e).__name__)
+            return None
+
+    if last_exc:
+        logger.warning("%s giving up after %d attempts", provider, _HTTP_MAX_ATTEMPTS)
+    return None
 
 
 async def search_google_books(
@@ -40,14 +110,13 @@ async def search_google_books(
         params["key"] = api_key
 
     results: list[LookupResult] = []
+    data = await _http_get_json(
+        "https://www.googleapis.com/books/v1/volumes", params, "google_books"
+    )
+    if data is None:
+        _set_cached(query, "google_books", results, db)
+        return results
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://www.googleapis.com/books/v1/volumes", params=params
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
         for item in data.get("items", []):
             vol = item.get("volumeInfo", {})
             authors = vol.get("authors", [])
@@ -102,14 +171,13 @@ async def search_openlibrary(
         return cached
 
     results: list[LookupResult] = []
+    data = await _http_get_json(
+        "https://openlibrary.org/search.json", params, "openlibrary"
+    )
+    if data is None:
+        _set_cached(query, "openlibrary", results, db)
+        return results
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://openlibrary.org/search.json", params=params
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
         for doc in data.get("docs", [])[:5]:
             authors = doc.get("author_name", [])
             year = doc.get("first_publish_year")
@@ -162,14 +230,13 @@ async def search_itunes(
     }
 
     results: list[LookupResult] = []
+    data = await _http_get_json(
+        "https://itunes.apple.com/search", params, "itunes"
+    )
+    if data is None:
+        _set_cached(query, "itunes", results, db)
+        return results
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://itunes.apple.com/search", params=params
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
         for item in data.get("results", []):
             item_title = item.get("collectionName") or item.get("trackName")
             item_author = item.get("artistName")
@@ -423,8 +490,13 @@ def _deduplicate_results(results: list[LookupResult]) -> list[LookupResult]:
 
 
 def _cache_key(query: str, provider: str) -> str:
-    """Generate a cache key hash."""
-    normalized = f"{provider}:{query.lower().strip()}"
+    """Generate a cache key hash.
+
+    Whitespace is collapsed so minor spacing differences don't cause
+    cache misses (e.g. "Brandon  Sanderson" vs "Brandon Sanderson").
+    """
+    collapsed = re.sub(r"\s+", " ", query.lower().strip())
+    normalized = f"{provider}:{collapsed}"
     return hashlib.sha256(normalized.encode()).hexdigest()
 
 

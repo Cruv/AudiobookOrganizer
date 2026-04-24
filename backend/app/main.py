@@ -28,25 +28,46 @@ from app.routers import settings as settings_router  # noqa: E402
 def _run_migrations(engine_instance):
     """Run lightweight schema migrations for existing databases.
 
-    SQLAlchemy create_all only creates NEW tables, not new columns on
-    existing tables.  This adds any missing columns via ALTER TABLE.
+    SQLAlchemy create_all only creates NEW tables, not new columns or
+    indexes on existing tables. This adds any missing columns via ALTER
+    TABLE and creates any missing indexes.
     """
     import sqlalchemy as sa
 
     migrations = [
         # (table, column, col_type_sql)
         ("books", "edition", "TEXT"),
+        ("books", "lookup_error", "TEXT"),
         ("scans", "status_detail", "TEXT"),
+    ]
+
+    indexes = [
+        # (name, create_sql)
+        (
+            "uq_scanned_folder_scan_path",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_scanned_folder_scan_path "
+            "ON scanned_folders (scan_id, folder_path)",
+        ),
+        (
+            "ix_scanned_folders_folder_path",
+            "CREATE INDEX IF NOT EXISTS ix_scanned_folders_folder_path "
+            "ON scanned_folders (folder_path)",
+        ),
+        (
+            "ix_books_confidence",
+            "CREATE INDEX IF NOT EXISTS ix_books_confidence ON books (confidence)",
+        ),
     ]
 
     with engine_instance.connect() as conn:
         for table, column, col_type in migrations:
-            # Check if column already exists
             result = conn.execute(sa.text(f"PRAGMA table_info({table})"))
             existing_cols = {row[1] for row in result}
             if column not in existing_cols:
                 conn.execute(sa.text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
                 logger.info("Migration: added %s.%s", table, column)
+        for _, ddl in indexes:
+            conn.execute(sa.text(ddl))
         conn.commit()
 
 
@@ -58,7 +79,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 app = FastAPI(
     title="Audiobook Organizer",

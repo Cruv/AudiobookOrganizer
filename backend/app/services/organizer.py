@@ -31,11 +31,14 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
 
     Tokens: {Author}, {Series}, {SeriesPosition}, {Title}, {Year},
             {Narrator}, {NarratorBraced}, {Edition}, {EditionBracketed}
-    Segments containing only unresolved tokens are collapsed (removed).
+
+    Segments whose only tokens are optional (Series, Year, Narrator, Edition)
+    collapse when empty. But "primary" segments — ones anchored on {Author}
+    or {Title} — fall back to "Unknown Author" / "Unknown Title" rather than
+    being dropped, so missing-metadata books still land in a predictable
+    bucket instead of being dumped at the output root.
     """
-    # {NarratorBraced} wraps narrator in curly braces for Audiobookshelf compatibility
     narrator_braced = "{" + book.narrator + "}" if book.narrator else None
-    # {EditionBracketed} wraps edition in brackets: [Graphic Audio]
     edition_bracketed = "[" + book.edition + "]" if book.edition else None
 
     token_map = {
@@ -49,6 +52,13 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
         "{Edition}": book.edition,
         "{EditionBracketed}": edition_bracketed,
     }
+    # Required-token fallbacks: if the segment is anchored on one of these
+    # and the value is missing, substitute the placeholder instead of
+    # collapsing the segment.
+    required_fallbacks = {
+        "{Author}": "Unknown Author",
+        "{Title}": "Unknown Title",
+    }
 
     segments = pattern.split("/")
     resolved_segments: list[str] = []
@@ -56,34 +66,33 @@ def build_output_path(book: Book, pattern: str, output_root: str) -> str:
     for segment in segments:
         resolved = segment
         has_value = False
+        used_fallback = False
 
         for token, value in token_map.items():
             if token in resolved:
                 if value:
                     resolved = resolved.replace(token, sanitize_path_component(value))
                     has_value = True
+                elif token in required_fallbacks:
+                    resolved = resolved.replace(token, required_fallbacks[token])
+                    used_fallback = True
                 else:
                     resolved = resolved.replace(token, "")
 
-        # Clean up the segment: remove dangling separators, empty parens/braces/brackets, etc.
+        # Clean up the segment: remove dangling separators, empty parens/braces/brackets.
         resolved = re.sub(r"\(\s*\)", "", resolved)
         resolved = re.sub(r"\{\s*\}", "", resolved)
         resolved = re.sub(r"\[\s*\]", "", resolved)
-        # Collapse consecutive dashes (e.g. "Book - - Title" → "Book - Title")
         resolved = re.sub(r"(?:\s*[-–—]\s*){2,}", " - ", resolved)
         resolved = re.sub(r"^\s*[-–—]\s*|\s*[-–—]\s*$", "", resolved)
-        # Remove "Book" prefix when no series position follows it
         resolved = re.sub(r"^Book\s*[-–—]\s*", "", resolved)
         resolved = re.sub(r"\s+", " ", resolved).strip()
 
-        # Only include segment if it has meaningful content
-        if resolved and has_value:
+        if resolved and (has_value or used_fallback):
             resolved_segments.append(resolved)
 
     if not resolved_segments:
-        # Fallback: use title or "Unknown"
-        fallback = sanitize_path_component(book.title or "Unknown")
-        resolved_segments = [fallback]
+        resolved_segments = [sanitize_path_component(book.title or "Unknown Title")]
 
     full_path = os.path.join(output_root, *resolved_segments)
 
@@ -129,7 +138,27 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
 
             shutil.copy2(book_file.original_path, dest_path)
 
+            # Verify size matches the source — catches truncated copies
+            # from disk-full, interrupted network shares, etc.
+            src_size = os.path.getsize(book_file.original_path)
+            dest_size = os.path.getsize(dest_path)
+            if src_size != dest_size:
+                logger.error(
+                    "Copy size mismatch for %s: src=%d dest=%d — removing partial copy",
+                    book_file.original_path,
+                    src_size,
+                    dest_size,
+                )
+                try:
+                    os.remove(dest_path)
+                except OSError:
+                    pass
+                book_file.copy_status = "failed"
+                all_success = False
+                continue
+
             book_file.destination_path = dest_path
+            book_file.file_size = src_size
             book_file.copy_status = "copied"
         except Exception:
             logger.error("Failed to copy %s", book_file.original_path, exc_info=True)

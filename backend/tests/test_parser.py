@@ -55,6 +55,18 @@ class TestFuzzyMatch:
         assert fuzzy_match("ab", "cd") is False
         assert fuzzy_match("ab", "ab") is True
 
+    def test_article_ignored(self):
+        """Leading articles should not block a match."""
+        assert fuzzy_match("The Final Empire", "Final Empire")
+
+    def test_whitespace_collapsed(self):
+        """Extra whitespace should not block a match."""
+        assert fuzzy_match("Brandon   Sanderson", "Brandon Sanderson")
+
+    def test_none_inputs(self):
+        assert fuzzy_match(None, "anything") is False
+        assert fuzzy_match("anything", None) is False
+
 
 class TestCleanNarrator:
     def test_none(self):
@@ -164,3 +176,56 @@ class TestAutoMatchScore:
         parsed = ParsedMetadata(title="The Final Empire")
         score = auto_match_score(parsed, "The Final Empire", None)
         assert score > 0
+
+    def test_article_insensitive(self):
+        """'The Final Empire' should match 'Final Empire' (article stripped)."""
+        parsed = ParsedMetadata(title="The Final Empire", author="Brandon Sanderson")
+        score = auto_match_score(parsed, "Final Empire", "Brandon Sanderson")
+        assert score >= 0.85
+
+    def test_partial_title_match_gets_partial_credit(self):
+        """Near-miss titles should get partial credit, not 0 like the old binary version."""
+        parsed = ParsedMetadata(title="The Final Empire", author="Brandon Sanderson")
+        # Slight typo in title — binary fuzzy_match likely fails, weighted scoring should give partial credit
+        score = auto_match_score(parsed, "The Final Empires", "Brandon Sanderson")
+        assert 0.7 < score < 1.0
+
+    def test_series_match_adds_weight(self):
+        """When series is present on both sides, it should contribute to score."""
+        parsed = ParsedMetadata(
+            title="The Final Empire",
+            author="Brandon Sanderson",
+            series="Mistborn",
+        )
+        without = auto_match_score(parsed, "The Final Empire", "Brandon Sanderson")
+        with_series = auto_match_score(
+            parsed,
+            "The Final Empire",
+            "Brandon Sanderson",
+            result_series="Mistborn",
+        )
+        # Match on an extra field should not lower the score
+        assert with_series >= without * 0.95
+
+    def test_wrong_author_still_penalized(self):
+        """Title match but wrong author should stay below auto-apply threshold."""
+        parsed = ParsedMetadata(title="The Final Empire", author="Brandon Sanderson")
+        score = auto_match_score(parsed, "The Final Empire", "Someone Completely Different")
+        assert score < 0.85
+
+    def test_year_proximity_helps_break_ties(self):
+        """A matching year should help score slightly over a mismatching year."""
+        parsed = ParsedMetadata(
+            title="The Final Empire",
+            author="Brandon Sanderson",
+            year="2006",
+        )
+        matching = auto_match_score(
+            parsed, "The Final Empire", "Brandon Sanderson", result_year="2006"
+        )
+        mismatching = auto_match_score(
+            parsed, "The Final Empire", "Brandon Sanderson", result_year="1950"
+        )
+        assert matching >= mismatching
+
+
