@@ -23,7 +23,16 @@ class Book(Base):
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, default="parsed"
     )
+    # Legacy conflated score. Kept for backwards compatibility with the
+    # existing Review UI; new code should prefer the split fields below
+    # and compute this as max(parse_confidence, match_confidence).
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    # How sure we are about the locally parsed/merged metadata (folder
+    # names + audio tags). Set once at parse time, not changed by lookup.
+    parse_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    # How well the currently-applied lookup result matched the parsed
+    # data. 0.0 when no lookup has been applied (source == "parsed").
+    match_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     output_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     organize_status: Mapped[str] = mapped_column(
@@ -46,6 +55,9 @@ class Book(Base):
         back_populates="book"
     )
     files: Mapped[list["BookFile"]] = relationship(
+        back_populates="book", cascade="all, delete-orphan"
+    )
+    candidates: Mapped[list["LookupCandidate"]] = relationship(
         back_populates="book", cascade="all, delete-orphan"
     )
 
@@ -75,4 +87,6 @@ class BookFile(Base):
     book: Mapped["Book"] = relationship(back_populates="files")
 
 
+# Imported for the relationship's type-annotation string resolution.
+from app.models.lookup_candidate import LookupCandidate  # noqa: E402, F401
 from app.models.scan import ScannedFolder  # noqa: E402, F401

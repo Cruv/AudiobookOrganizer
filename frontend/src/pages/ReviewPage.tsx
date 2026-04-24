@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
+  ListChecks,
 } from 'lucide-react';
 import {
   useBooks,
@@ -25,6 +26,7 @@ import { exportBooks } from '@/api/client';
 import { ConfidenceBadge, SourceBadge, EditionBadge } from '@/components/ui/Badge';
 import BookEditModal from '@/components/BookEditModal';
 import SearchModal from '@/components/SearchModal';
+import CandidatesModal from '@/components/CandidatesModal';
 import { useToast } from '@/components/Toast';
 import { Button, Card, Input, Select, EmptyState, PageSkeleton } from '@/components/ui';
 import type { Book } from '@/types';
@@ -116,6 +118,7 @@ export default function ReviewPage() {
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [searchingBook, setSearchingBook] = useState<Book | null>(null);
+  const [candidatesBook, setCandidatesBook] = useState<Book | null>(null);
 
   const handleExport = async () => {
     try {
@@ -282,6 +285,14 @@ export default function ReviewPage() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  icon={<ListChecks size={15} />}
+                  onClick={() => setCandidatesBook(book)}
+                  title="Review lookup candidates"
+                  aria-label="Review candidates"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
                   icon={<Search size={15} />}
                   onClick={() => setSearchingBook(book)}
                   title="Search Online"
@@ -403,6 +414,13 @@ export default function ReviewPage() {
         <SearchModal
           book={searchingBook}
           onClose={() => setSearchingBook(null)}
+        />
+      )}
+
+      {candidatesBook && (
+        <CandidatesModal
+          book={candidatesBook}
+          onClose={() => setCandidatesBook(null)}
         />
       )}
     </div>

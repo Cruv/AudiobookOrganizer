@@ -38,6 +38,8 @@ def _run_migrations(engine_instance):
         # (table, column, col_type_sql)
         ("books", "edition", "TEXT"),
         ("books", "lookup_error", "TEXT"),
+        ("books", "parse_confidence", "FLOAT DEFAULT 0.0"),
+        ("books", "match_confidence", "FLOAT DEFAULT 0.0"),
         ("scans", "status_detail", "TEXT"),
     ]
 
@@ -79,7 +81,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 app = FastAPI(
     title="Audiobook Organizer",

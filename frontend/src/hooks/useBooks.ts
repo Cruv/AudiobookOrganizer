@@ -96,3 +96,47 @@ export function useApplyLookup() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
   });
 }
+
+export function useCandidates(bookId: number, includeRejected = false) {
+  return useQuery({
+    queryKey: ['candidates', bookId, includeRejected],
+    queryFn: () => api.getCandidates(bookId, includeRejected),
+    enabled: bookId > 0,
+  });
+}
+
+export function useRelookupBook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, autoApply = true }: { id: number; autoApply?: boolean }) =>
+      api.relookupBook(id, autoApply),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['candidates', vars.id] });
+      qc.invalidateQueries({ queryKey: ['books'] });
+    },
+  });
+}
+
+export function useApplyCandidate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ bookId, candidateId }: { bookId: number; candidateId: number }) =>
+      api.applyCandidate(bookId, candidateId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['candidates', vars.bookId] });
+      qc.invalidateQueries({ queryKey: ['books'] });
+    },
+  });
+}
+
+export function useRejectCandidate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ bookId, candidateId }: { bookId: number; candidateId: number }) =>
+      api.rejectCandidate(bookId, candidateId),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['candidates', vars.bookId] });
+      qc.invalidateQueries({ queryKey: ['books'] });
+    },
+  });
+}

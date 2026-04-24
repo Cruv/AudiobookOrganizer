@@ -2,10 +2,12 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.book import Book
+from app.models.lookup_candidate import LookupCandidate
 from app.models.scan import ScannedFolder
 from app.models.settings import UserSetting
 from app.schemas.book import (
@@ -18,6 +20,7 @@ from app.schemas.book import (
     LookupResponse,
     PaginatedBooksResponse,
 )
+from app.services.candidates import apply_candidate, refresh_candidates, reject_candidate
 from app.services.lookup import lookup_book
 from app.services.organizer import build_output_path
 
@@ -341,6 +344,159 @@ async def search_book_endpoint(
 
     results = await lookup_book(body.query, None, api_key, db)
     return LookupResponse(results=results)
+
+
+# --------------------------------------------------------------------- #
+# Persisted lookup candidates
+# --------------------------------------------------------------------- #
+
+class CandidateResponse(BaseModel):
+    id: int
+    book_id: int
+    provider: str
+    provider_rank: int
+    title: str | None
+    author: str | None
+    series: str | None
+    series_position: str | None
+    year: str | None
+    narrator: str | None
+    description: str | None
+    cover_url: str | None
+    raw_confidence: float
+    match_score: float
+    trust_weight: float
+    ranking_score: float
+    match_breakdown: dict | None
+    rejected: bool
+    applied: bool
+
+    model_config = {"from_attributes": True}
+
+
+def _candidate_to_response(c: LookupCandidate) -> CandidateResponse:
+    breakdown = None
+    if c.match_breakdown:
+        try:
+            breakdown = json.loads(c.match_breakdown)
+        except (ValueError, TypeError):
+            breakdown = None
+    return CandidateResponse(
+        id=c.id, book_id=c.book_id, provider=c.provider,
+        provider_rank=c.provider_rank, title=c.title, author=c.author,
+        series=c.series, series_position=c.series_position, year=c.year,
+        narrator=c.narrator, description=c.description, cover_url=c.cover_url,
+        raw_confidence=c.raw_confidence, match_score=c.match_score,
+        trust_weight=c.trust_weight, ranking_score=c.ranking_score,
+        match_breakdown=breakdown, rejected=c.rejected, applied=c.applied,
+    )
+
+
+@router.get("/{book_id}/candidates", response_model=list[CandidateResponse])
+def list_candidates(
+    book_id: int,
+    include_rejected: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """List persisted lookup candidates for a book, best first."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    q = db.query(LookupCandidate).filter(LookupCandidate.book_id == book_id)
+    if not include_rejected:
+        q = q.filter(LookupCandidate.rejected.is_(False))
+    candidates = q.order_by(LookupCandidate.ranking_score.desc()).all()
+    return [_candidate_to_response(c) for c in candidates]
+
+
+@router.post("/{book_id}/relookup", response_model=list[CandidateResponse])
+async def relookup_book(
+    book_id: int,
+    auto_apply: bool = Query(True),
+    db: Session = Depends(get_db),
+):
+    """Re-run lookup for a single book: refresh candidates and, unless
+    ?auto_apply=false, apply the best non-rejected one.
+
+    Does NOT reset rejected candidates — if the user has explicitly said
+    no to a provider's result, that stays.
+    """
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    api_key_setting = (
+        db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
+    )
+    api_key = api_key_setting.value if api_key_setting else None
+
+    candidates = await refresh_candidates(book, db, api_key=api_key, auto_apply=auto_apply)
+    return [_candidate_to_response(c) for c in candidates]
+
+
+@router.post("/{book_id}/candidates/{candidate_id}/apply", response_model=BookResponse)
+def apply_candidate_endpoint(
+    book_id: int, candidate_id: int, db: Session = Depends(get_db)
+):
+    """Apply a specific persisted candidate to the book."""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    candidate = (
+        db.query(LookupCandidate)
+        .filter(
+            LookupCandidate.id == candidate_id,
+            LookupCandidate.book_id == book_id,
+        )
+        .first()
+    )
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    apply_candidate(book, candidate, db)
+    db.commit()
+    db.refresh(book)
+
+    resp = BookResponse.model_validate(book)
+    _attach_book_info(book, resp, db)
+    return resp
+
+
+@router.post("/{book_id}/candidates/{candidate_id}/reject", response_model=BookResponse)
+def reject_candidate_endpoint(
+    book_id: int, candidate_id: int, db: Session = Depends(get_db)
+):
+    """Reject a persisted candidate. If it was applied, revert the book
+    to the parsed state (source=parsed, match_confidence=0).
+    """
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    candidate = (
+        db.query(LookupCandidate)
+        .filter(
+            LookupCandidate.id == candidate_id,
+            LookupCandidate.book_id == book_id,
+        )
+        .first()
+    )
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    reject_candidate(candidate, db)
+    db.commit()
+    db.refresh(book)
+
+    resp = BookResponse.model_validate(book)
+    _attach_book_info(book, resp, db)
+    return resp
+
+
+# --------------------------------------------------------------------- #
+# Legacy apply-lookup (cached-results lookup by index). Kept so the
+# existing SearchModal keeps working until the frontend migrates.
+# --------------------------------------------------------------------- #
 
 
 @router.post("/{book_id}/apply-lookup", response_model=BookResponse)

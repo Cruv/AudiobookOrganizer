@@ -18,8 +18,6 @@ from app.models.scan import Scan, ScannedFolder
 from app.models.settings import UserSetting
 from app.services.metadata import is_audio_file, read_folder_tags, read_tags
 from app.services.parser import (
-    ParsedMetadata,
-    auto_match_score,
     clean_narrator,
     detect_edition,
     merge_with_tags,
@@ -145,11 +143,12 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
 async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None:
     """Auto-lookup metadata for all books and apply best matches.
 
-    Records any per-book lookup failure as book.lookup_error so the Review
-    page can surface it to the user rather than silently losing the book.
+    Delegates to candidates.refresh_candidates which persists every
+    result as a LookupCandidate row and auto-applies the best one if it
+    passes the trust-weighted ranking threshold. Per-book failures are
+    recorded as book.lookup_error.
     """
-    from app.services.lookup import lookup_book
-    from app.services.parser import clean_narrator, clean_query
+    from app.services.candidates import refresh_candidates
 
     api_key_setting = db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     api_key = api_key_setting.value if api_key_setting else None
@@ -157,75 +156,17 @@ async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None
     total = len(books)
     for idx, book in enumerate(books):
         try:
-            # Clear any stale error from a previous run
             book.lookup_error = None
-
-            query = clean_query(book.title, book.author)
-            if not query or len(query) < 3:
-                book.lookup_error = "Query too short to look up"
-                db.commit()
-                continue
-
-            scan.status_detail = f"Looking up {idx + 1}/{total}: {query[:50]}"
+            query_preview = (book.title or "")[:50]
+            scan.status_detail = f"Looking up {idx + 1}/{total}: {query_preview}"
             db.commit()
 
-            logger.info("Auto-lookup %d/%d: %s", idx + 1, total, query)
-
-            results = await lookup_book(query, book.author, api_key, db)
-            if not results:
-                book.lookup_error = "No matches from any provider"
-                db.commit()
-                await asyncio.sleep(0.3)
-                continue
-
-            # Score each result against parsed data
-            parsed = ParsedMetadata(
-                title=book.title,
-                author=book.author,
-                series=book.series,
-                series_position=book.series_position,
-                year=book.year,
-                narrator=book.narrator,
+            logger.info(
+                "Auto-lookup %d/%d: %s by %s",
+                idx + 1, total, book.title, book.author,
             )
 
-            best_score = 0.0
-            best_result = None
-            for result in results:
-                score = auto_match_score(
-                    parsed,
-                    result.title,
-                    result.author,
-                    result_series=result.series,
-                    result_year=result.year,
-                    result_narrator=result.narrator,
-                )
-                if score > best_score:
-                    best_score = score
-                    best_result = result
-
-            # Auto-apply if match is strong enough
-            if best_result and best_score >= AUTO_APPLY_MATCH_THRESHOLD:
-                if best_result.title:
-                    book.title = best_result.title
-                if best_result.author:
-                    book.author = best_result.author
-                if best_result.series and not book.series:
-                    book.series = best_result.series
-                if best_result.series_position and not book.series_position:
-                    book.series_position = best_result.series_position
-                if best_result.year and not book.year:
-                    book.year = best_result.year
-                if best_result.narrator and not book.narrator:
-                    book.narrator = clean_narrator(best_result.narrator, book.edition)
-                book.source = f"auto:{best_result.provider}"
-                book.confidence = max(book.confidence, min(best_result.confidence, 0.95))
-            else:
-                # Don't apply, but record why for user visibility
-                book.lookup_error = (
-                    f"Best match score {best_score:.2f} below threshold "
-                    f"{AUTO_APPLY_MATCH_THRESHOLD:.2f}"
-                )
-            db.commit()
+            await refresh_candidates(book, db, api_key=api_key, auto_apply=True)
 
             await asyncio.sleep(0.3)
 
@@ -329,7 +270,10 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     # Clean and normalize narrator (reject publishers, strip junk, normalize GA casts)
     parsed.narrator = clean_narrator(parsed.narrator, edition)
 
-    # Create Book record
+    # Create Book record. parse_confidence captures how sure we are of
+    # the local parse — that's what later passes use to decide whether
+    # online lookup is even needed. confidence (the legacy single field)
+    # is kept in sync as max(parse, match) so the existing UI works.
     book = Book(
         scanned_folder_id=scanned_folder.id,
         title=parsed.title,
@@ -341,6 +285,8 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
         edition=parsed.edition,
         source=parsed.source,
         confidence=parsed.confidence,
+        parse_confidence=parsed.confidence,
+        match_confidence=0.0,
     )
     db.add(book)
     db.flush()
@@ -519,6 +465,12 @@ def _carry_forward_manual_edits(scan: Scan, db: Session) -> None:
         book.is_confirmed = prior.is_confirmed
         book.source = prior.source
         book.confidence = max(book.confidence, prior.confidence)
+        # Carry forward split scores too so the review UI reflects the
+        # user's prior confirmation strength.
+        if prior.parse_confidence:
+            book.parse_confidence = max(book.parse_confidence, prior.parse_confidence)
+        if prior.match_confidence:
+            book.match_confidence = prior.match_confidence
         carried += 1
 
     if carried:

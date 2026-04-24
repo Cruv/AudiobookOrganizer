@@ -25,6 +25,43 @@ _HTTP_TIMEOUT = 10.0
 _HTTP_MAX_ATTEMPTS = 3
 _HTTP_BASE_BACKOFF = 0.5  # seconds; jittered exponential
 
+# How much we trust each provider's data quality. Used as a multiplier
+# on the raw match_score when picking the best candidate: audibles that
+# barely match are preferred over iTunes results that barely match.
+# Users can override via the "provider_trust_{name}" user setting.
+DEFAULT_PROVIDER_TRUST = {
+    "audible": 1.00,     # audiobook-native, has narrator, usually correct
+    "itunes": 0.90,      # audiobook-native but often wrong author/edition
+    "google_books": 0.75,  # book-oriented, rarely knows audiobook editions
+    "openlibrary": 0.65,  # crowd-sourced, weakest of the four
+}
+
+
+def get_provider_trust(provider: str, db: Session | None = None) -> float:
+    """Return the trust weight for a provider, 0.0–1.0.
+
+    If a user setting named "provider_trust_<provider>" exists, use that;
+    otherwise fall back to DEFAULT_PROVIDER_TRUST, otherwise 1.0.
+    """
+    from app.models.settings import UserSetting
+
+    default = DEFAULT_PROVIDER_TRUST.get(provider, 1.0)
+    if db is None:
+        return default
+    setting = (
+        db.query(UserSetting)
+        .filter(UserSetting.key == f"provider_trust_{provider}")
+        .first()
+    )
+    if not setting or not setting.value:
+        return default
+    try:
+        val = float(setting.value)
+        # Clamp to sane range.
+        return max(0.0, min(1.0, val))
+    except ValueError:
+        return default
+
 
 async def _http_get_json(
     url: str,

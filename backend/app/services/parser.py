@@ -795,6 +795,56 @@ _MATCH_WEIGHTS = {
 }
 
 
+def compute_match_breakdown(
+    parsed: ParsedMetadata,
+    result_title: str | None,
+    result_author: str | None,
+    result_series: str | None = None,
+    result_year: str | None = None,
+    result_narrator: str | None = None,
+) -> dict[str, float | None]:
+    """Return a per-field similarity breakdown and a weighted total.
+
+    The per-field scores are None when that field is missing on either
+    side, so the UI can render "not compared" rather than "0". The total
+    redistributes weight from absent fields and applies a penalty when a
+    parsed value was present but the result didn't supply anything.
+
+    Shape: {"title": 0.95|None, "author": ..., "series": ..., "year":
+    ..., "narrator": ..., "total": 0.87}
+    """
+    field_scores: dict[str, float | None] = {
+        "title": similarity(parsed.title, result_title) if (parsed.title and result_title) else None,
+        "author": similarity(parsed.author, result_author) if (parsed.author and result_author) else None,
+        "series": similarity(parsed.series, result_series) if (parsed.series and result_series) else None,
+        "year": _year_proximity(parsed.year, result_year) if (parsed.year and result_year) else None,
+        "narrator": similarity(parsed.narrator, result_narrator) if (parsed.narrator and result_narrator) else None,
+    }
+
+    active_weight = sum(w for k, w in _MATCH_WEIGHTS.items() if field_scores[k] is not None)
+    if active_weight == 0:
+        field_scores["total"] = 0.0
+        return field_scores
+
+    total = 0.0
+    for field, weight in _MATCH_WEIGHTS.items():
+        s = field_scores[field]
+        if s is None:
+            continue
+        total += (weight / active_weight) * s
+
+    # Penalty when parsed side has a value but result side doesn't —
+    # a richer result should beat a sparser one on the same match.
+    for field in ("title", "author"):
+        parsed_val = getattr(parsed, field, None)
+        result_val = {"title": result_title, "author": result_author}[field]
+        if parsed_val and not result_val:
+            total *= 0.85
+
+    field_scores["total"] = min(total, 1.0)
+    return field_scores
+
+
 def auto_match_score(
     parsed: ParsedMetadata,
     result_title: str | None,
@@ -805,41 +855,16 @@ def auto_match_score(
 ) -> float:
     """Score how well a lookup result matches parsed metadata, 0.0 to 1.0.
 
-    Weighted, partial-credit: each field contributes its weight times its
-    similarity. Weights of fields that are missing on BOTH sides are
-    redistributed proportionally to the remaining fields so a book with
-    no series/year/narrator can still reach 1.0 on title+author alone.
+    Thin wrapper over compute_match_breakdown that returns just the
+    weighted total. Kept for callers that don't need per-field scores.
     """
-    field_scores: dict[str, float | None] = {}
-
-    # Title and author are always expected
-    field_scores["title"] = similarity(parsed.title, result_title) if (parsed.title and result_title) else None
-    field_scores["author"] = similarity(parsed.author, result_author) if (parsed.author and result_author) else None
-    field_scores["series"] = similarity(parsed.series, result_series) if (parsed.series and result_series) else None
-    field_scores["year"] = _year_proximity(parsed.year, result_year) if (parsed.year and result_year) else None
-    field_scores["narrator"] = similarity(parsed.narrator, result_narrator) if (parsed.narrator and result_narrator) else None
-
-    # Redistribute weight from fields missing on both sides
-    active_weight = sum(w for k, w in _MATCH_WEIGHTS.items() if field_scores[k] is not None)
-    if active_weight == 0:
-        return 0.0
-
-    score = 0.0
-    for field, weight in _MATCH_WEIGHTS.items():
-        s = field_scores[field]
-        if s is None:
-            continue
-        score += (weight / active_weight) * s
-
-    # Penalty when parsed side has a value but result side doesn't (missing data):
-    # Shouldn't fully disqualify but should dent confidence so a richer result wins.
-    for field in ("title", "author"):
-        parsed_val = getattr(parsed, field, None)
-        result_val = {"title": result_title, "author": result_author}[field]
-        if parsed_val and not result_val:
-            score *= 0.85
-
-    return min(score, 1.0)
+    breakdown = compute_match_breakdown(
+        parsed, result_title, result_author,
+        result_series=result_series,
+        result_year=result_year,
+        result_narrator=result_narrator,
+    )
+    return breakdown["total"] or 0.0
 
 
 def clean_narrator(narrator: str | None, edition: str | None = None) -> str | None:

@@ -36,6 +36,8 @@ export interface Book {
   edition: string | null;
   source: string;
   confidence: number;
+  parse_confidence: number;
+  match_confidence: number;
   is_confirmed: boolean;
   output_path: string | null;
   organize_status: 'pending' | 'copying' | 'copied' | 'failed';
@@ -80,6 +82,35 @@ export interface LookupResult {
   description: string | null;
   cover_url: string | null;
   confidence: number;
+}
+
+export interface LookupCandidate {
+  id: number;
+  book_id: number;
+  provider: string;
+  provider_rank: number;
+  title: string | null;
+  author: string | null;
+  series: string | null;
+  series_position: string | null;
+  year: string | null;
+  narrator: string | null;
+  description: string | null;
+  cover_url: string | null;
+  raw_confidence: number;
+  match_score: number;
+  trust_weight: number;
+  ranking_score: number;
+  match_breakdown: {
+    title?: number | null;
+    author?: number | null;
+    series?: number | null;
+    year?: number | null;
+    narrator?: number | null;
+    total?: number | null;
+  } | null;
+  rejected: boolean;
+  applied: boolean;
 }
 
 export interface OrganizePreviewItem {

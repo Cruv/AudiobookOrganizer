@@ -4,6 +4,7 @@ import type {
   BookDetail,
   BrowseResult,
   InviteItem,
+  LookupCandidate,
   LookupResult,
   OrganizePreviewItem,
   PaginatedBooks,
@@ -145,6 +146,28 @@ export const applyLookup = (
   request<Book>(`/books/${id}/apply-lookup`, {
     method: 'POST',
     body: JSON.stringify(data),
+  });
+
+// Persisted candidates (new model)
+export const getCandidates = (bookId: number, includeRejected = false) => {
+  const qs = includeRejected ? '?include_rejected=true' : '';
+  return request<LookupCandidate[]>(`/books/${bookId}/candidates${qs}`);
+};
+
+export const relookupBook = (bookId: number, autoApply = true) =>
+  request<LookupCandidate[]>(
+    `/books/${bookId}/relookup${autoApply ? '' : '?auto_apply=false'}`,
+    { method: 'POST' },
+  );
+
+export const applyCandidate = (bookId: number, candidateId: number) =>
+  request<Book>(`/books/${bookId}/candidates/${candidateId}/apply`, {
+    method: 'POST',
+  });
+
+export const rejectCandidate = (bookId: number, candidateId: number) =>
+  request<Book>(`/books/${bookId}/candidates/${candidateId}/reject`, {
+    method: 'POST',
   });
 
 // Export

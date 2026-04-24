@@ -34,6 +34,8 @@ class BookResponse(BaseModel):
     edition: str | None
     source: str
     confidence: float
+    parse_confidence: float = 0.0
+    match_confidence: float = 0.0
     is_confirmed: bool
     output_path: str | None
     organize_status: str
