@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -173,6 +174,120 @@ def _organize_books(book_ids: list[int], pattern: str, root: str) -> None:
                     db.rollback()
     finally:
         db.close()
+
+
+class UndoOrganizeRequest(BaseModel):
+    book_ids: list[int]
+
+
+class UndoOrganizeResult(BaseModel):
+    book_id: int
+    success: bool
+    files_removed: int
+    error: str | None = None
+
+
+class UndoOrganizeResponse(BaseModel):
+    results: list[UndoOrganizeResult]
+
+
+@router.post("/undo", response_model=UndoOrganizeResponse)
+def undo_organize(
+    body: UndoOrganizeRequest, db: Session = Depends(get_db),
+):
+    """Reverse an organize operation: delete the copied destination
+    files and reset the book back to organize_status="pending".
+
+    Only safe when the original source files still exist — we refuse
+    to delete the copy otherwise (that would leave the user with no
+    copies of the audio anywhere). Sidecars and cover.jpg are deleted
+    along with the audio.
+
+    Books in organize_status="failed" can also be undone (cleans up
+    partial state). Books that were already purged are skipped — by
+    that point the originals are gone so reversing would lose data.
+    """
+    import os
+
+    books = (
+        db.query(Book)
+        .options(joinedload(Book.files), joinedload(Book.scanned_folder))
+        .filter(Book.id.in_(body.book_ids))
+        .all()
+    )
+
+    results: list[UndoOrganizeResult] = []
+    for book in books:
+        if book.purge_status == "purged":
+            results.append(UndoOrganizeResult(
+                book_id=book.id, success=False, files_removed=0,
+                error="Already purged; cannot undo.",
+            ))
+            continue
+
+        # Safety: refuse if ANY source file is missing.
+        missing_sources = [
+            bf for bf in book.files
+            if bf.original_path and not os.path.exists(bf.original_path)
+        ]
+        if missing_sources:
+            results.append(UndoOrganizeResult(
+                book_id=book.id, success=False, files_removed=0,
+                error=(
+                    f"Refusing to undo: {len(missing_sources)} source file(s) "
+                    "are missing. Removing the copy would lose data."
+                ),
+            ))
+            continue
+
+        files_removed = 0
+        had_error: str | None = None
+        output_dir = book.output_path
+        for bf in book.files:
+            dest = bf.destination_path
+            if dest and os.path.isfile(dest):
+                try:
+                    os.remove(dest)
+                    files_removed += 1
+                except Exception as e:
+                    had_error = f"Couldn't remove {dest}: {e}"
+                    break
+            bf.destination_path = None
+            bf.copy_status = "pending"
+
+        # Best-effort: remove sidecar + cover.jpg + empty output dir.
+        if output_dir and os.path.isdir(output_dir):
+            from app.services.organizer import COVER_FILENAME, SIDECAR_FILENAME
+
+            for filename in (SIDECAR_FILENAME, COVER_FILENAME):
+                p = os.path.join(output_dir, filename)
+                if os.path.isfile(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+            try:
+                if not os.listdir(output_dir):
+                    os.rmdir(output_dir)
+            except OSError:
+                # Not empty (user added files manually, or shared with
+                # another book) — leave it alone.
+                pass
+
+        if had_error is None:
+            book.organize_status = "pending"
+            book.output_path = None
+            results.append(UndoOrganizeResult(
+                book_id=book.id, success=True, files_removed=files_removed,
+            ))
+        else:
+            results.append(UndoOrganizeResult(
+                book_id=book.id, success=False,
+                files_removed=files_removed, error=had_error,
+            ))
+
+    db.commit()
+    return UndoOrganizeResponse(results=results)
 
 
 @router.get("/status/{book_id}", response_model=OrganizeStatusResponse)

@@ -163,6 +163,15 @@ export const relookupBook = (bookId: number, autoApply = true) =>
     { method: 'POST' },
   );
 
+export const relookupBatch = (book_ids: number[], auto_apply = true) =>
+  request<{ processed: number; total: number; failed: number }>(
+    '/books/relookup-batch',
+    {
+      method: 'POST',
+      body: JSON.stringify({ book_ids, auto_apply }),
+    },
+  );
+
 export const applyCandidate = (bookId: number, candidateId: number) =>
   request<Book>(`/books/${bookId}/candidates/${candidateId}/apply`, {
     method: 'POST',
@@ -245,6 +254,14 @@ export const verifyPurge = (book_ids: number[]) =>
 
 export const executePurge = (book_ids: number[]) =>
   request<{ results: PurgeResultItem[] }>('/purge/execute', {
+    method: 'POST',
+    body: JSON.stringify({ book_ids }),
+  });
+
+export const undoOrganize = (book_ids: number[]) =>
+  request<{
+    results: { book_id: number; success: boolean; files_removed: number; error: string | null }[];
+  }>('/organize/undo', {
     method: 'POST',
     body: JSON.stringify({ book_ids }),
   });

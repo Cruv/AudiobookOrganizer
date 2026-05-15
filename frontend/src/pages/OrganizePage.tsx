@@ -1,19 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
-import { FolderOutput, Eye, FolderCheck } from 'lucide-react';
+import { FolderOutput, Eye, FolderCheck, Undo2, History } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
+import { useQueryClient } from '@tanstack/react-query';
 import * as api from '@/api/client';
 import type { OrganizePreviewItem } from '@/types';
 import { ConfidenceBadge } from '@/components/ui/Badge';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import { useToast } from '@/components/Toast';
 import { Button, Card, EmptyState, PageSkeleton } from '@/components/ui';
 
+/**
+ * The Organize page has two tabs:
+ *  - "Pending" (default): confirmed books ready to copy.
+ *  - "Recent": already-organized books, ordered newest first, with an
+ *    Undo control so the user can reverse a mistaken organize before
+ *    purging the originals.
+ */
+type Tab = 'pending' | 'recent';
+
 export default function OrganizePage() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [tab, setTab] = useState<Tab>('pending');
+
   const { data: booksData, isLoading, refetch } = useBooks({
     confirmed: true,
     organize_status: 'pending',
     page_size: 200,
   });
   const books = booksData?.items;
-  const { data: organizedData } = useBooks({ organize_status: 'copied', page_size: 200 });
+  const { data: organizedData, refetch: refetchOrganized } = useBooks({
+    organize_status: 'copied',
+    page_size: 200,
+    // Most-recent first so the user sees what they just did at the top.
+    sort: 'created_at',
+  });
   const organizedBooks = organizedData?.items;
 
   const [previews, setPreviews] = useState<OrganizePreviewItem[]>([]);
@@ -21,13 +42,10 @@ export default function OrganizePage() {
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [organizingIds, setOrganizingIds] = useState<number[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [undoTargetIds, setUndoTargetIds] = useState<number[] | null>(null);
+  const [isUndoing, setIsUndoing] = useState(false);
 
-  // Poll per-book organize status while a batch is in flight. Using a
-  // useEffect keyed on isOrganizing+ids avoids the stale-closure trap
-  // from the previous setInterval pattern: that captured `books` at
-  // handler-creation time, then the `pending` filter dropped in-flight
-  // books from the query, so the closure saw an empty remaining list
-  // on tick 1 and falsely declared completion.
+  // Poll per-book organize status while a batch is in flight.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     if (!isOrganizing || organizingIds.length === 0) return;
@@ -46,14 +64,13 @@ export default function OrganizePage() {
           setSelected(new Set());
           setPreviews([]);
           refetch();
+          refetchOrganized();
         }
       } catch {
         // ignore transient errors; next tick will retry
       }
     };
 
-    // Kick off immediately and then on interval so the UI clears as
-    // soon as the backend reports done.
     checkProgress();
     pollRef.current = setInterval(checkProgress, 2000);
     return () => {
@@ -62,7 +79,7 @@ export default function OrganizePage() {
         pollRef.current = null;
       }
     };
-  }, [isOrganizing, organizingIds, refetch]);
+  }, [isOrganizing, organizingIds, refetch, refetchOrganized]);
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => {
@@ -74,8 +91,9 @@ export default function OrganizePage() {
   };
 
   const selectAll = () => {
-    if (!books) return;
-    setSelected(new Set(books.map((b) => b.id)));
+    const list = tab === 'pending' ? books : organizedBooks;
+    if (!list) return;
+    setSelected(new Set(list.map((b) => b.id)));
   };
 
   const handlePreview = async () => {
@@ -102,6 +120,33 @@ export default function OrganizePage() {
     }
   };
 
+  const handleUndo = async () => {
+    if (!undoTargetIds || undoTargetIds.length === 0) return;
+    const ids = undoTargetIds;
+    setUndoTargetIds(null);
+    setIsUndoing(true);
+    try {
+      const resp = await api.undoOrganize(ids);
+      const ok = resp.results.filter((r) => r.success).length;
+      const failed = resp.results.length - ok;
+      if (ok > 0) {
+        toast.success(
+          `Undone ${ok} book${ok === 1 ? '' : 's'}; files removed and books back to pending.`,
+        );
+      }
+      if (failed > 0) {
+        const reason = resp.results.find((r) => !r.success)?.error;
+        toast.error(`Couldn't undo ${failed}${reason ? `: ${reason}` : ''}.`);
+      }
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ['books'] });
+    } catch {
+      toast.error('Undo failed');
+    } finally {
+      setIsUndoing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div>
@@ -111,9 +156,14 @@ export default function OrganizePage() {
     );
   }
 
+  const activeList = tab === 'pending' ? books : organizedBooks;
+  const selectedInTab = Array.from(selected).filter((id) =>
+    activeList?.some((b) => b.id === id),
+  );
+
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div>
           <h1 className="text-2xl font-bold">Organize</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>
@@ -123,34 +173,84 @@ export default function OrganizePage() {
             )}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="secondary" size="sm" onClick={selectAll}>
             Select All
           </Button>
-          <Button
-            size="sm"
-            icon={<Eye size={14} />}
-            loading={isPreviewing}
-            disabled={selected.size === 0}
-            onClick={handlePreview}
-          >
-            Preview
-          </Button>
-          <Button
-            variant="success"
-            size="sm"
-            icon={<FolderOutput size={14} />}
-            loading={isOrganizing}
-            disabled={selected.size === 0}
-            onClick={handleOrganize}
-          >
-            Organize ({selected.size})
-          </Button>
+          {tab === 'pending' ? (
+            <>
+              <Button
+                size="sm"
+                icon={<Eye size={14} />}
+                loading={isPreviewing}
+                disabled={selectedInTab.length === 0}
+                onClick={handlePreview}
+              >
+                Preview
+              </Button>
+              <Button
+                variant="success"
+                size="sm"
+                icon={<FolderOutput size={14} />}
+                loading={isOrganizing}
+                disabled={selectedInTab.length === 0}
+                onClick={handleOrganize}
+              >
+                Organize ({selectedInTab.length})
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="danger"
+              size="sm"
+              icon={<Undo2 size={14} />}
+              loading={isUndoing}
+              disabled={selectedInTab.length === 0}
+              onClick={() => setUndoTargetIds(selectedInTab)}
+              title="Delete the copied files and reset books to pending. Originals are untouched."
+            >
+              Undo ({selectedInTab.length})
+            </Button>
+          )}
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-1 mb-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
+        <button
+          type="button"
+          onClick={() => {
+            setTab('pending');
+            setSelected(new Set());
+          }}
+          className="px-3 py-2 text-sm border-b-2 transition-colors"
+          style={{
+            borderColor: tab === 'pending' ? 'var(--color-primary)' : 'transparent',
+            color: tab === 'pending' ? 'var(--color-text)' : 'var(--color-text-muted)',
+          }}
+        >
+          <FolderOutput size={14} className="inline mr-1.5 align-middle" />
+          Pending ({books?.length || 0})
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setTab('recent');
+            setSelected(new Set());
+          }}
+          className="px-3 py-2 text-sm border-b-2 transition-colors"
+          style={{
+            borderColor: tab === 'recent' ? 'var(--color-primary)' : 'transparent',
+            color: tab === 'recent' ? 'var(--color-text)' : 'var(--color-text-muted)',
+          }}
+        >
+          <History size={14} className="inline mr-1.5 align-middle" />
+          Recently organized ({organizedBooks?.length || 0})
+        </button>
+      </div>
+
       {/* Preview results */}
-      {previews.length > 0 && (
+      {tab === 'pending' && previews.length > 0 && (
         <Card className="mb-6" header={<h3 className="text-sm font-semibold">Path Preview</h3>}>
           <div className="space-y-2">
             {previews.map((p) => (
@@ -168,7 +268,7 @@ export default function OrganizePage() {
 
       {/* Book list */}
       <div className="space-y-2">
-        {books?.map((book) => (
+        {activeList?.map((book) => (
           <Card
             key={book.id}
             className="cursor-pointer"
@@ -182,8 +282,6 @@ export default function OrganizePage() {
                 type="checkbox"
                 checked={selected.has(book.id)}
                 onChange={() => toggleSelect(book.id)}
-                // Stop click propagation so the outer card onClick
-                // doesn't fire a SECOND toggle and cancel out this one.
                 onClick={(e) => e.stopPropagation()}
                 className="flex-shrink-0"
                 aria-label={`Select ${book.title}`}
@@ -196,19 +294,50 @@ export default function OrganizePage() {
                 <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
                   {book.author || 'Unknown Author'}
                 </span>
+                {tab === 'recent' && book.output_path && (
+                  <p
+                    className="text-xs font-mono mt-1 truncate"
+                    style={{ color: 'var(--color-success)' }}
+                    title={book.output_path}
+                  >
+                    {book.output_path}
+                  </p>
+                )}
               </div>
             </div>
           </Card>
         ))}
 
-        {books?.length === 0 && (
+        {tab === 'pending' && books?.length === 0 && (
           <EmptyState
             icon={FolderCheck}
             title="No confirmed books to organize"
             description="Go to the Review page to confirm books first."
           />
         )}
+        {tab === 'recent' && organizedBooks?.length === 0 && (
+          <EmptyState
+            icon={History}
+            title="Nothing organized yet"
+            description="Books you organize will appear here so you can review or undo recent changes."
+          />
+        )}
       </div>
+
+      {undoTargetIds && undoTargetIds.length > 0 && (
+        <ConfirmDialog
+          title={`Undo organize for ${undoTargetIds.length} book${undoTargetIds.length === 1 ? '' : 's'}?`}
+          message={
+            'This deletes the copied files from the output folder and resets the books to "pending". ' +
+            'Original source files are NOT touched. If any source file is missing the undo will be ' +
+            'refused for that book (we never delete the only remaining copy of your audio).'
+          }
+          confirmLabel="Undo Organize"
+          confirmColor="var(--color-danger)"
+          onConfirm={handleUndo}
+          onCancel={() => setUndoTargetIds(null)}
+        />
+      )}
     </div>
   );
 }

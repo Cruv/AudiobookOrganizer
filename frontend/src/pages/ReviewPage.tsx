@@ -18,6 +18,7 @@ import {
   Pencil,
   FolderCheck,
   Trash2,
+  RefreshCw,
 } from 'lucide-react';
 import {
   useBooks,
@@ -30,6 +31,7 @@ import {
   useUnlockBook,
   useMarkOrganizedBatch,
   useDeleteBook,
+  useRelookupBatch,
 } from '@/hooks/useBooks';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { exportBooks } from '@/api/client';
@@ -148,6 +150,7 @@ export default function ReviewPage() {
   const unlockBook = useUnlockBook();
   const markOrganizedBatch = useMarkOrganizedBatch();
   const deleteBook = useDeleteBook();
+  const relookupBatch = useRelookupBatch();
   const toast = useToast();
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
@@ -357,6 +360,32 @@ export default function ReviewPage() {
                 }}
               >
                 Mark Organized
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<RefreshCw size={14} />}
+                loading={relookupBatch.isPending}
+                title="Re-run online lookup for the selected books. Useful after connecting Audible or fixing parser issues."
+                onClick={() => {
+                  const ids = Array.from(selectedIds);
+                  relookupBatch.mutate(
+                    { book_ids: ids, auto_apply: true },
+                    {
+                      onSuccess: (data) => {
+                        toast.success(
+                          `Re-looked up ${data.processed} of ${data.total} books${
+                            data.failed ? ` (${data.failed} failed)` : ''
+                          }`,
+                        );
+                        clearSelection();
+                      },
+                      onError: () => toast.error('Re-lookup failed'),
+                    },
+                  );
+                }}
+              >
+                Re-lookup
               </Button>
               <Button variant="secondary" size="sm" onClick={clearSelection}>
                 Clear

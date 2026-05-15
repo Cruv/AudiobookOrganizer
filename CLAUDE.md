@@ -56,6 +56,13 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 6, v1.16.0 — PR 5 of multi-PR audit pass)
+- **Bulk re-lookup** (`POST /api/books/relookup-batch`): runs `refresh_candidates` for N books with bounded concurrency (re-using `AUTO_LOOKUP_CONCURRENCY=5`). Surfaced in the ReviewPage bulk action bar as "Re-lookup" — typical use case is connecting Audible after an initial scan, so all books get re-evaluated against the better provider without a full re-scan.
+- **Undo organize** (`POST /api/organize/undo`): deletes the destination files, sidecar, and cover.jpg; tries to remove the (now empty) output dir; resets the book back to `organize_status="pending"` and `BookFile.copy_status="pending"`. Refuses to undo any book whose source files have gone missing (we never delete the only remaining copy of the audio). Refuses purged books outright. Surfaced via an "Undo" button on the new "Recently organized" tab.
+- **Recently-organized view**: OrganizePage now has tabs — "Pending" (the existing workflow) and "Recently organized" (newest first; clickable selection; bulk Undo). The page header still shows aggregate counts.
+- **Light/dark theme toggle** (`hooks/useTheme.ts`, `components/Layout.tsx`, `index.css`): defines CSS variables under `:root, [data-theme="dark"]` and a full light palette under `[data-theme="light"]`. The hook reads `localStorage` first, falls back to `prefers-color-scheme`. A sun/moon toggle button lives in the sidebar footer next to Logout.
+- 6 new backend tests covering undo happy path, source-missing refusal, purged refusal, non-empty output dir handling, and relookup-batch processed/failed counts (with stubbed refresh_candidates).
+
 ### Recent Changes (Session 2026-05-15 part 5, v1.15.0 — PR 4 of multi-PR audit pass)
 - **Cover art**:
   - **`cover.jpg` written during organize** (`services/organizer.py:_download_cover_art`): when a book has an applied (or top-ranked non-rejected) candidate with a `cover_url`, the organizer downloads it and writes `<output_dir>/cover.jpg` after the audio files commit. Audiobookshelf, Plex, and Jellyfin auto-detect this filename. Best-effort: failure is logged, not fatal. Capped at 10MB; only writes if no cover already exists.

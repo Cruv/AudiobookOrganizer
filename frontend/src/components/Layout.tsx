@@ -6,12 +6,15 @@ import {
   FolderSearch,
   LogOut,
   Menu,
+  Moon,
   Settings,
+  Sun,
   Trash2,
   FolderOutput,
   X,
 } from 'lucide-react';
 import { logout } from '@/api/client';
+import { useTheme } from '@/hooks/useTheme';
 
 const workflowSteps = [
   { to: '/', icon: FolderSearch, label: 'Scan', step: 1 },
@@ -29,6 +32,7 @@ export default function Layout({ username, isAdmin }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const location = useLocation();
+  const { theme, toggle: toggleTheme } = useTheme();
 
   // Fetch version from API on mount
   const fetchVersion = useCallback(() => {
@@ -152,15 +156,27 @@ export default function Layout({ username, isAdmin }: Props) {
                 </span>
               )}
             </span>
-            <button
-              onClick={handleLogout}
-              className="p-1.5 rounded hover:bg-[var(--color-surface-hover)]"
-              style={{ color: 'var(--color-text-muted)' }}
-              title="Log out"
-              aria-label="Log out"
-            >
-              <LogOut size={14} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={toggleTheme}
+                className="p-1.5 rounded hover:bg-[var(--color-surface-hover)]"
+                style={{ color: 'var(--color-text-muted)' }}
+                title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+                aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              >
+                {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+              </button>
+              <button
+                onClick={handleLogout}
+                className="p-1.5 rounded hover:bg-[var(--color-surface-hover)]"
+                style={{ color: 'var(--color-text-muted)' }}
+                title="Log out"
+                aria-label="Log out"
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
           </div>
         )}
         {appVersion && (

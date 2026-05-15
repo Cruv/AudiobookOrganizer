@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
-:root {
+/* Default = dark theme (matches the original design). The theme
+   provider on <html> sets data-theme="light" to flip to the light
+   palette, or omits the attribute for dark. */
+:root,
+[data-theme="dark"] {
   --color-primary: #6366f1;
   --color-primary-hover: #4f46e5;
   --color-success: #22c55e;
@@ -13,6 +17,23 @@
   --color-text: #f8fafc;
   --color-text-muted: #94a3b8;
   --color-focus: #818cf8;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-success: #15803d;
+  --color-warning: #b45309;
+  --color-danger: #b91c1c;
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-text-muted: #475569;
+  --color-focus: #6366f1;
+  color-scheme: light;
 }
 
 body {

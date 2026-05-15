@@ -734,6 +734,86 @@ def list_candidates(
     return [_candidate_to_response(c) for c in candidates]
 
 
+class RelookupBatchRequest(BaseModel):
+    book_ids: list[int]
+    auto_apply: bool = True
+
+
+class RelookupBatchResponse(BaseModel):
+    processed: int
+    total: int
+    failed: int
+
+
+@router.post("/relookup-batch", response_model=RelookupBatchResponse)
+async def relookup_batch(
+    body: RelookupBatchRequest, db: Session = Depends(get_db),
+):
+    """Re-run lookup for many books in one call.
+
+    Common use case: user connected Audible AFTER an initial scan, so
+    no book has Audible candidates yet. Without this they'd have to
+    click Re-lookup on each book or kick off a full re-scan (which
+    re-walks the filesystem). Mirrors the existing confirm-batch
+    pattern. Uses the same bounded-concurrency primitive as auto-
+    lookup so we don't hammer providers.
+    """
+    if not body.book_ids:
+        raise HTTPException(status_code=400, detail="book_ids required")
+
+    import asyncio
+
+    from app.database import SessionLocal
+    from app.services.candidates import refresh_candidates
+    from app.services.scanner import AUTO_LOOKUP_CONCURRENCY
+
+    # Resolve API key once from the request-scoped session — we don't
+    # want N concurrent settings reads.
+    api_key_setting = (
+        db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
+    )
+    api_key = api_key_setting.value if api_key_setting else None
+
+    semaphore = asyncio.Semaphore(AUTO_LOOKUP_CONCURRENCY)
+    state = {"failed": 0}
+    state_lock = asyncio.Lock()
+
+    async def _one(book_id: int):
+        async with semaphore:
+            task_db = SessionLocal()
+            try:
+                bk = task_db.query(Book).filter(Book.id == book_id).first()
+                if bk is None:
+                    return
+                try:
+                    await refresh_candidates(
+                        bk, task_db, api_key=api_key, auto_apply=body.auto_apply,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Bulk re-lookup failed for book %s: %s",
+                        book_id, type(e).__name__, exc_info=True,
+                    )
+                    async with state_lock:
+                        state["failed"] += 1
+                    try:
+                        task_db.rollback()
+                    except Exception:
+                        pass
+                # Per-task spacing to stay polite to upstream providers.
+                await asyncio.sleep(0.3)
+            finally:
+                task_db.close()
+
+    await asyncio.gather(*(_one(i) for i in body.book_ids))
+
+    return RelookupBatchResponse(
+        processed=len(body.book_ids) - state["failed"],
+        total=len(body.book_ids),
+        failed=state["failed"],
+    )
+
+
 @router.post("/{book_id}/relookup", response_model=list[CandidateResponse])
 async def relookup_book(
     book_id: int,

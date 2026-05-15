@@ -152,6 +152,18 @@ export function useRelookupBook() {
   });
 }
 
+export function useRelookupBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ book_ids, auto_apply = true }: { book_ids: number[]; auto_apply?: boolean }) =>
+      api.relookupBatch(book_ids, auto_apply),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['books'] });
+      qc.invalidateQueries({ queryKey: ['candidates'] });
+    },
+  });
+}
+
 export function useApplyCandidate() {
   const qc = useQueryClient();
   return useMutation({
