@@ -13,10 +13,19 @@ RUN apk add --no-cache nginx curl shadow
 
 WORKDIR /app
 
-# Copy backend and install Python dependencies
+# Install Python dependencies in a separate layer so the heavy
+# pip-install step doesn't re-run on every backend code edit. We need
+# a stub `app/__init__.py` because pyproject.toml's setuptools
+# discovery walks the source tree, and pip otherwise refuses to
+# install. Real source is copied in the next layer.
 COPY backend/pyproject.toml ./
+RUN mkdir -p ./app && touch ./app/__init__.py && \
+    pip install --no-cache-dir . && \
+    rm -rf ./app
+
+# Now copy the real source. Edits here invalidate this layer only,
+# not the (slow) pip-install layer above.
 COPY backend/app ./app
-RUN pip install --no-cache-dir .
 
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist /app/static

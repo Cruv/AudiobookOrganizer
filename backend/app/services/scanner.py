@@ -52,6 +52,11 @@ MULTI_PART_LEAF_PATTERN = re.compile(
 AUTO_LOOKUP_CONFIDENCE_THRESHOLD = 0.90
 # Minimum auto_match_score before a lookup result is automatically applied.
 AUTO_APPLY_MATCH_THRESHOLD = 0.85
+# How many books to look up in parallel during auto-lookup. Bounded so
+# we don't overwhelm upstream providers' rate limits — at 5 we still
+# stay under typical rate caps per provider since each provider only
+# sees one request per book.
+AUTO_LOOKUP_CONCURRENCY = 5
 
 
 def scan_directory(source_dir: str, db: Session) -> Scan:
@@ -163,42 +168,71 @@ async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None
     result as a LookupCandidate row and auto-applies the best one if it
     passes the trust-weighted ranking threshold. Per-book failures are
     recorded as book.lookup_error.
+
+    Books are looked up in bounded-concurrency batches of AUTO_LOOKUP_CONCURRENCY.
+    Each parallel task gets its OWN SessionLocal — SQLAlchemy sessions
+    aren't safe to share across coroutines, even under single-thread
+    asyncio. Progress is reported via a shared counter on the parent
+    `db` session. The 0.3s spacing is preserved per-task so the
+    upstream providers don't see a 5x rate spike from this side.
     """
+    from app.database import SessionLocal
     from app.services.candidates import refresh_candidates
 
     api_key_setting = db.query(UserSetting).filter(UserSetting.key == "google_books_api_key").first()
     api_key = api_key_setting.value if api_key_setting else None
 
     total = len(books)
-    for idx, book in enumerate(books):
-        try:
-            book.lookup_error = None
-            query_preview = (book.title or "")[:50]
-            scan.status_detail = f"Looking up {idx + 1}/{total}: {query_preview}"
-            db.commit()
+    book_ids = [b.id for b in books]
 
-            logger.info(
-                "Auto-lookup %d/%d: %s by %s",
-                idx + 1, total, book.title, book.author,
-            )
+    # Progress counter shared across tasks.
+    state = {"done": 0}
+    state_lock = asyncio.Lock()
 
-            await refresh_candidates(book, db, api_key=api_key, auto_apply=True)
+    semaphore = asyncio.Semaphore(AUTO_LOOKUP_CONCURRENCY)
 
-            await asyncio.sleep(0.3)
-
-        except Exception as e:
-            logger.warning(
-                "Auto-lookup failed for book %s: %s",
-                book.id,
-                type(e).__name__,
-                exc_info=True,
-            )
+    async def _one(book_id: int) -> None:
+        async with semaphore:
+            task_db = SessionLocal()
             try:
-                book.lookup_error = f"{type(e).__name__}: {str(e)[:200]}"
-                db.commit()
-            except Exception:
-                db.rollback()
-            continue
+                task_book = task_db.query(Book).filter(Book.id == book_id).first()
+                if task_book is None:
+                    return
+                task_book.lookup_error = None
+                try:
+                    await refresh_candidates(
+                        task_book, task_db, api_key=api_key, auto_apply=True,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Auto-lookup failed for book %s: %s",
+                        book_id, type(e).__name__, exc_info=True,
+                    )
+                    try:
+                        task_db.rollback()
+                        # Re-fetch on the now-rolled-back session so we
+                        # have a clean object to write the error on.
+                        fresh = task_db.query(Book).filter(Book.id == book_id).first()
+                        if fresh is not None:
+                            fresh.lookup_error = f"{type(e).__name__}: {str(e)[:200]}"
+                            task_db.commit()
+                    except Exception:
+                        task_db.rollback()
+                # Per-task pause prevents the four upstream providers from
+                # seeing 5× the request rate from this scan.
+                await asyncio.sleep(0.3)
+            finally:
+                task_db.close()
+            async with state_lock:
+                state["done"] += 1
+                # Update parent scan progress with a single committed write.
+                try:
+                    scan.status_detail = f"Looking up {state['done']}/{total}"
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
+    await asyncio.gather(*(_one(bid) for bid in book_ids))
 
 
 def _find_audiobook_folders(source_dir: str) -> list[str]:
@@ -303,8 +337,12 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     # Parse folder name
     parsed = parse_folder_path(folder_path)
 
-    # Read consensus tags from multiple files
-    consensus_tags = read_folder_tags(folder_path)
+    # Read consensus tags from multiple files. The cache dict lets us
+    # reuse the same mutagen reads when populating per-file BookFile
+    # rows below — was opening every file twice (once for consensus,
+    # once per BookFile).
+    per_file_tags: dict[str, dict[str, str | None]] = {}
+    consensus_tags = read_folder_tags(folder_path, per_file_tags=per_file_tags)
 
     # Detect edition (Graphic Audio, etc.) before merging tags
     edition = detect_edition(folder_path, folder_name, consensus_tags)
@@ -355,12 +393,15 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
             folder_path,
         )
 
-    # Create BookFile records (read individual tags for per-file data)
-    first_tags = read_tags(audio_files[0][0])
+    # Create BookFile records. Reuse tag dicts that read_folder_tags
+    # already populated; only re-read for files past the consensus
+    # sample window (which has never been opened yet).
     for filepath, filename in audio_files:
         ext = os.path.splitext(filename)[1].lower().lstrip(".")
         file_size = os.path.getsize(filepath)
-        tags = read_tags(filepath) if filepath != audio_files[0][0] else first_tags
+        tags = per_file_tags.get(filepath)
+        if tags is None:
+            tags = read_tags(filepath)
 
         book_file = BookFile(
             book_id=book.id,

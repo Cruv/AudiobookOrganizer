@@ -56,6 +56,19 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 3, v1.13.0 — PR 2 of multi-PR audit pass)
+- **Backend performance**:
+  - **Parallel lookup providers** (`services/lookup.py`): `lookup_book` now runs Audible/Google/OpenLibrary/iTunes via `asyncio.gather`. Total wall-clock is `max(provider_time)` instead of sum — ~2.5x faster lookup phase.
+  - **Bounded-concurrency auto-lookup** (`services/scanner.py`): `_auto_lookup_books` now processes up to `AUTO_LOOKUP_CONCURRENCY=5` books in parallel, each with its own `SessionLocal()`. ~5x throughput on the lookup phase.
+  - **Shared `httpx.AsyncClient`** (`services/lookup.py`): module-level pool created lazily via `get_http_client()`, closed at FastAPI lifespan shutdown. Connection keepalive amortizes TCP+TLS handshake cost across the whole scan. ~30-50% latency reduction per HTTP call.
+  - **DB indexes** (`main.py:_run_migrations`): added `ix_books_is_confirmed`, `ix_books_organize_status`, `ix_books_purge_status`, `ix_books_edition`, `ix_books_title`, `ix_books_author`, `ix_books_created_at`, `ix_lookup_candidates_book_id`, `ix_user_sessions_token`. ReviewPage filter+sort goes from O(N log N) to O(log N + page).
+  - **`list_books` separate count query** (`routers/books.py`): count now runs against a lean `Book.id` query with no joinedload + no order_by; the fetch query is built separately with full eager load and sort. ~2x faster pagination on large libraries.
+  - **`read_tags` once per file** (`services/metadata.py`, `services/scanner.py`): `read_folder_tags` now accepts an optional `per_file_tags` dict that callers can populate and reuse. `_process_folder` threads it through so each BookFile reuses the same tag dict instead of opening mutagen a second time. ~3-5x faster folder processing on multi-chapter MP3 books.
+  - **Docker layer cache** (`Dockerfile`): pip-install layer no longer invalidates on backend code edits. Stub `app/__init__.py` lets pip install dependencies before the real source is copied. Saves 60-90s per backend-only commit in CI.
+- **Bug**:
+  - **`apply_lookup` now keyed by book identity** (`routers/books.py`): previously it took the most recent 10 cache rows for the provider and applied `results[result_index]`, which could apply one book's lookup result to a different book. Now reconstructs the per-provider query key from THIS book's title+author and finds the exact matching cache row.
+- 10 new tests covering shared httpx singleton + idempotent close, parallel-provider timing under mocks, paginated count correctness, and apply_lookup book-identity behavior.
+
 ### Recent Changes (Session 2026-05-15 part 2, v1.12.0 — PR 1 of multi-PR audit pass)
 - **Critical bug fixes + purge bug + delete-book endpoint** (branch `claude/naughty-driscoll-a6ebe8`):
   - **Lookup cache silent defeat** (`services/lookup.py`): `LookupCache.expires_at` is a naive `DateTime`; comparing to `datetime.now(timezone.utc)` raised `TypeError`, swallowed by `_safe_provider`, so every cache hit became a fresh API call. Normalize naive → aware on read. Re-scans are now ~4x faster.

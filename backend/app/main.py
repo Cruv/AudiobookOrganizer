@@ -60,6 +60,49 @@ def _run_migrations(engine_instance):
             "ix_books_confidence",
             "CREATE INDEX IF NOT EXISTS ix_books_confidence ON books (confidence)",
         ),
+        # Filters / sorts surfaced through the books list endpoint.
+        # Without these, every paginated query at 5k+ books does a
+        # full scan + filesort on the matching column.
+        (
+            "ix_books_is_confirmed",
+            "CREATE INDEX IF NOT EXISTS ix_books_is_confirmed ON books (is_confirmed)",
+        ),
+        (
+            "ix_books_organize_status",
+            "CREATE INDEX IF NOT EXISTS ix_books_organize_status ON books (organize_status)",
+        ),
+        (
+            "ix_books_purge_status",
+            "CREATE INDEX IF NOT EXISTS ix_books_purge_status ON books (purge_status)",
+        ),
+        (
+            "ix_books_edition",
+            "CREATE INDEX IF NOT EXISTS ix_books_edition ON books (edition)",
+        ),
+        (
+            "ix_books_title",
+            "CREATE INDEX IF NOT EXISTS ix_books_title ON books (title)",
+        ),
+        (
+            "ix_books_author",
+            "CREATE INDEX IF NOT EXISTS ix_books_author ON books (author)",
+        ),
+        (
+            "ix_books_created_at",
+            "CREATE INDEX IF NOT EXISTS ix_books_created_at ON books (created_at)",
+        ),
+        # Hot path for the candidate-resolution flow.
+        (
+            "ix_lookup_candidates_book_id",
+            "CREATE INDEX IF NOT EXISTS ix_lookup_candidates_book_id ON lookup_candidates (book_id)",
+        ),
+        # Sessions are looked up by token on every authenticated
+        # request — index it so the middleware doesn't full-scan
+        # the table on every API call.
+        (
+            "ix_user_sessions_token",
+            "CREATE INDEX IF NOT EXISTS ix_user_sessions_token ON user_sessions (token)",
+        ),
     ]
 
     with engine_instance.connect() as conn:
@@ -99,9 +142,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Startup staging cleanup failed", exc_info=True)
     yield
+    # Shutdown: release the shared httpx pool.
+    try:
+        from app.services.lookup import aclose_http_client
+        await aclose_http_client()
+    except Exception:
+        logger.warning("Shutdown httpx cleanup failed", exc_info=True)
 
 
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.13.0"
 
 app = FastAPI(
     title="Audiobook Organizer",

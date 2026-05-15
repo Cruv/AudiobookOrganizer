@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -80,27 +81,38 @@ def list_books(
     db: Session = Depends(get_db),
 ):
     """List books with optional filtering and pagination."""
-    query = db.query(Book).outerjoin(ScannedFolder).options(joinedload(Book.scanned_folder))
+    # Build a base query of just `Book.id` joined to ScannedFolder for
+    # filtering. The count() runs against this lean query (no
+    # joinedload, no order_by) — much faster than counting the full
+    # joined-result query SQLAlchemy used to emit.
+    base_query = db.query(Book.id)
+    join_required = scan_id is not None
+    if join_required:
+        base_query = base_query.outerjoin(ScannedFolder).filter(ScannedFolder.scan_id == scan_id)
 
-    if scan_id is not None:
-        query = query.filter(ScannedFolder.scan_id == scan_id)
     if confirmed is not None:
-        query = query.filter(Book.is_confirmed == confirmed)
+        base_query = base_query.filter(Book.is_confirmed == confirmed)
     if organize_status is not None:
-        query = query.filter(Book.organize_status == organize_status)
+        base_query = base_query.filter(Book.organize_status == organize_status)
     if purge_status is not None:
-        query = query.filter(Book.purge_status == purge_status)
+        base_query = base_query.filter(Book.purge_status == purge_status)
     if edition is not None:
-        query = query.filter(Book.edition == edition)
+        base_query = base_query.filter(Book.edition == edition)
     if min_confidence is not None:
-        query = query.filter(Book.confidence >= min_confidence)
+        base_query = base_query.filter(Book.confidence >= min_confidence)
     if max_confidence is not None:
-        query = query.filter(Book.confidence <= max_confidence)
+        base_query = base_query.filter(Book.confidence <= max_confidence)
     if search:
         search_term = f"%{search}%"
-        query = query.filter(
+        base_query = base_query.filter(
             (Book.title.ilike(search_term)) | (Book.author.ilike(search_term))
         )
+
+    total = base_query.with_entities(func.count(Book.id)).order_by(None).scalar() or 0
+
+    # Now run the actual fetch with joinedload + ordering, reusing the
+    # same filters but adding the joined-load and order_by.
+    query = base_query.with_entities(Book).options(joinedload(Book.scanned_folder))
 
     if sort == "confidence":
         query = query.order_by(Book.confidence.asc())
@@ -113,7 +125,6 @@ def list_books(
     else:
         query = query.order_by(Book.created_at.desc())
 
-    total = query.count()
     books = query.offset((page - 1) * page_size).limit(page_size).all()
 
     # Fetch output settings once, not per-book — used to render projected_path.
@@ -755,36 +766,83 @@ def reject_candidate_endpoint(
 def apply_lookup(
     book_id: int, body: ApplyLookup, db: Session = Depends(get_db)
 ):
-    """Apply a lookup result to a book."""
+    """Apply a lookup result to a book.
+
+    Looks up the result by THIS BOOK's title+author cache key, not by
+    "most recent cache row for the provider" — the old approach could
+    apply user A's lookup result to user B's book if the two books
+    shared a provider in the recent cache. Now we recompute the cache
+    key from this book's identifying fields and find the row that
+    corresponds.
+    """
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
 
-    # Re-fetch the cached results to get the specific one
-    import json
+    if body.result_index < 0:
+        raise HTTPException(status_code=400, detail="result_index must be non-negative")
+
+    import json as _json
 
     from app.models.lookup_cache import LookupCache
+    from app.services.lookup import _cache_key
+    from app.services.parser import clean_query
 
-    # Find the most recent cache entry for this provider
-    cache_entries = (
-        db.query(LookupCache)
-        .filter(LookupCache.provider == body.provider)
-        .order_by(LookupCache.created_at.desc())
-        .limit(10)
-        .all()
-    )
+    # Reconstruct the query string each provider uses so we can find
+    # the matching cache row for THIS book.
+    title = book.title or ""
+    author = book.author or ""
+    query_keys: list[str] = []
+    if body.provider == "audible":
+        # Audible cache key includes the locale prefix — read the
+        # locale from settings to rebuild it.
+        from app.models.settings import UserSetting
+        locale_row = db.query(UserSetting).filter(UserSetting.key == "audible_locale").first()
+        locale = locale_row.value if locale_row else "us"
+        query_keys.append(f"audible:{locale}:{clean_query(title, author)}")
+    elif body.provider == "itunes":
+        query_keys.append(clean_query(title, author))
+    elif body.provider == "google_books":
+        parts = [f"intitle:{title}"]
+        if author:
+            parts.append(f"inauthor:{author}")
+        query_keys.append("+".join(parts))
+    elif body.provider == "openlibrary":
+        query_keys.append(f"title={title}&author={author}")
+    else:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown provider: {body.provider}"
+        )
 
-    result_data = None
-    for entry in cache_entries:
-        results = json.loads(entry.response_json)
-        if body.result_index < len(results):
-            result_data = results[body.result_index]
+    cache_row: LookupCache | None = None
+    for q in query_keys:
+        cache_row = (
+            db.query(LookupCache)
+            .filter(LookupCache.query_hash == _cache_key(q, body.provider))
+            .first()
+        )
+        if cache_row is not None:
             break
 
-    if not result_data:
-        raise HTTPException(status_code=404, detail="Lookup result not found")
+    if cache_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No cached lookup for this book/provider. Re-run lookup first.",
+        )
 
-    # Apply the lookup data to the book
+    try:
+        results = _json.loads(cache_row.response_json)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=500, detail="Cache row is malformed.")
+
+    if body.result_index >= len(results):
+        raise HTTPException(
+            status_code=404,
+            detail=f"result_index {body.result_index} is out of range (only {len(results)} results).",
+        )
+
+    result_data = results[body.result_index]
+
     if result_data.get("title"):
         book.title = result_data["title"]
     if result_data.get("author"):
