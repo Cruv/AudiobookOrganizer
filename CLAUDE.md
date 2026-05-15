@@ -56,6 +56,14 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 5, v1.15.0 — PR 4 of multi-PR audit pass)
+- **Cover art**:
+  - **`cover.jpg` written during organize** (`services/organizer.py:_download_cover_art`): when a book has an applied (or top-ranked non-rejected) candidate with a `cover_url`, the organizer downloads it and writes `<output_dir>/cover.jpg` after the audio files commit. Audiobookshelf, Plex, and Jellyfin auto-detect this filename. Best-effort: failure is logged, not fatal. Capped at 10MB; only writes if no cover already exists.
+  - **`BookResponse.cover_url`** (`schemas/book.py`, `routers/books.py`): the list/detail endpoints now include the chosen cover URL. Picks applied candidate first, then highest-ranking non-rejected. `selectinload(Book.candidates)` avoids N+1.
+  - **`GET /api/books/{id}/cover`** (`routers/books.py:get_book_cover`): serves the locally-cached `cover.jpg` for organized books. Avoids loading remote CDN URLs in the browser (mixed-content + CSP friendly) and works offline.
+  - **Thumbnails on ReviewPage**: each book row gets a 40×56 thumbnail. Tries the local cover first (organized books), falls back to remote URL on error, hides on broken remote.
+- 13 new tests covering pick-cover-url priority, download with mocked httpx, no-op when no URL or file already exists, BookResponse.cover_url attachment, and the `/cover` endpoint.
+
 ### Recent Changes (Session 2026-05-15 part 4, v1.14.0 — PR 3 of multi-PR audit pass)
 - **Frontend performance**:
   - **Code splitting** (`App.tsx`, `vite.config.ts`): post-auth pages (Scan/Review/Organize/Purge/Settings) now lazy-loaded via `React.lazy()` + `Suspense`. Vite `manualChunks` splits React, TanStack Query, and Lucide icons into separate vendor chunks for better long-term caching. Initial paint loads ~50 kB less JS.

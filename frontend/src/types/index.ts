@@ -47,6 +47,7 @@ export interface Book {
   folder_path: string | null;
   folder_name: string | null;
   projected_path: string | null;
+  cover_url: string | null;
   created_at: string;
   updated_at: string;
 }

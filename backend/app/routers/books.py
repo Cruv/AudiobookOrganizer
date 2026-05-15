@@ -2,10 +2,10 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db
 from app.models.book import Book
@@ -50,12 +50,15 @@ def _attach_book_info(
     pattern: str | None = None,
     root: str | None = None,
 ) -> None:
-    """Attach folder info and projected path to a book response.
+    """Attach folder info, projected path, and cover URL to a book response.
 
     `pattern` / `root` can be passed to avoid a per-book settings lookup
     when we're attaching info for many books in a row. When they're
     None we fall back to _get_settings(db) so single-book callers
     don't have to change.
+
+    Cover URL prefers the currently-applied candidate; falls back to
+    the highest-ranking non-rejected candidate with a cover.
     """
     if book.scanned_folder:
         resp.folder_path = book.scanned_folder.folder_path
@@ -63,6 +66,21 @@ def _attach_book_info(
     if pattern is None or root is None:
         pattern, root = _get_settings(db)
     resp.projected_path = build_output_path(book, pattern, root)
+
+    cover_url: str | None = None
+    fallback_url: str | None = None
+    fallback_score = -1.0
+    for c in book.candidates:
+        if c.rejected or not c.cover_url:
+            continue
+        if c.applied:
+            cover_url = c.cover_url
+            break
+        score = c.ranking_score or 0.0
+        if score > fallback_score:
+            fallback_url = c.cover_url
+            fallback_score = score
+    resp.cover_url = cover_url or fallback_url
 
 
 @router.get("", response_model=PaginatedBooksResponse)
@@ -111,8 +129,13 @@ def list_books(
     total = base_query.with_entities(func.count(Book.id)).order_by(None).scalar() or 0
 
     # Now run the actual fetch with joinedload + ordering, reusing the
-    # same filters but adding the joined-load and order_by.
-    query = base_query.with_entities(Book).options(joinedload(Book.scanned_folder))
+    # same filters but adding the joined-load and order_by. Candidates
+    # are loaded via selectinload (separate IN-list query) so a book
+    # with 8 candidates doesn't multiply the row count by 8.
+    query = base_query.with_entities(Book).options(
+        joinedload(Book.scanned_folder),
+        selectinload(Book.candidates),
+    )
 
     if sort == "confidence":
         query = query.order_by(Book.confidence.asc())
@@ -220,7 +243,11 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     """Get book details including files."""
     book = (
         db.query(Book)
-        .options(joinedload(Book.files), joinedload(Book.scanned_folder))
+        .options(
+            joinedload(Book.files),
+            joinedload(Book.scanned_folder),
+            selectinload(Book.candidates),
+        )
         .filter(Book.id == book_id)
         .first()
     )
@@ -230,6 +257,40 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     resp = BookDetailResponse.model_validate(book)
     _attach_book_info(book, resp, db)
     return resp
+
+
+@router.get("/{book_id}/cover")
+def get_book_cover(book_id: int, db: Session = Depends(get_db)):
+    """Serve the locally-cached cover image for a book.
+
+    If the book has been organized, we have a cover.jpg in the output
+    folder (downloaded during organize). Serve that. Otherwise return
+    404 — the frontend should fall back to the remote `cover_url` from
+    the BookResponse, which points at the provider's CDN.
+
+    Serving locally avoids loading remote URLs through the user's
+    browser, which keeps mixed-content warnings + CSP happy and means
+    the UI still works if the user is offline or the provider takes
+    down a cover URL.
+    """
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.scanned_folder))
+        .filter(Book.id == book_id)
+        .first()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    if not book.output_path:
+        raise HTTPException(status_code=404, detail="No organized cover available")
+
+    import os
+
+    cover_path = os.path.join(book.output_path, "cover.jpg")
+    if not os.path.isfile(cover_path):
+        raise HTTPException(status_code=404, detail="cover.jpg not found")
+
+    return FileResponse(cover_path, media_type="image/jpeg")
 
 
 # --------------------------------------------------------------------- #

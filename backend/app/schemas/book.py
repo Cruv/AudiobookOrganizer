@@ -45,6 +45,7 @@ class BookResponse(BaseModel):
     folder_path: str | None = None
     folder_name: str | None = None
     projected_path: str | None = None
+    cover_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

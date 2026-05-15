@@ -404,6 +404,35 @@ export default function ReviewPage() {
                 onChange={() => toggleSelected(book.id)}
                 aria-label={`Select ${book.title || 'book'}`}
               />
+              {/* Cover thumbnail: prefer the locally-cached cover.jpg
+                  (organized books), fall back to the remote candidate
+                  URL. onError hides the element on broken images. */}
+              {(book.cover_url || book.organize_status === 'copied') && (
+                <img
+                  src={
+                    book.organize_status === 'copied'
+                      ? `/api/books/${book.id}/cover`
+                      : book.cover_url || ''
+                  }
+                  alt=""
+                  loading="lazy"
+                  className="w-10 h-14 object-cover rounded flex-shrink-0"
+                  style={{ backgroundColor: 'var(--color-surface-hover)' }}
+                  onError={(e) => {
+                    // Local cover missing? Fall back to the candidate URL.
+                    const img = e.currentTarget;
+                    if (
+                      book.organize_status === 'copied' &&
+                      book.cover_url &&
+                      img.src.endsWith(`/api/books/${book.id}/cover`)
+                    ) {
+                      img.src = book.cover_url;
+                    } else {
+                      img.style.display = 'none';
+                    }
+                  }}
+                />
+              )}
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2 mb-1">
                   <span className="font-medium text-sm truncate">

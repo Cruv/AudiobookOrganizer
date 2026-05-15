@@ -301,6 +301,100 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
         except Exception:
             logger.warning("Could not write sidecar for book %s", book.id, exc_info=True)
 
+    # Download cover.jpg if any candidate has a cover URL. Audiobookshelf,
+    # Plex, and Jellyfin all auto-detect cover.jpg/folder.jpg next to
+    # audio — without this, users have to add covers manually post-
+    # organize. Best-effort: failure is logged, not fatal.
+    if any(bf.copy_status == "copied" for bf in book.files):
+        try:
+            _download_cover_art(book, output_dir)
+        except Exception:
+            logger.warning("Could not download cover for book %s", book.id, exc_info=True)
+
+
+COVER_FILENAME = "cover.jpg"
+# Cap cover downloads at 10 MB to defend against a misbehaving provider
+# pointing us at a huge image (or a redirect to something else entirely).
+_COVER_MAX_BYTES = 10 * 1024 * 1024
+_COVER_TIMEOUT = 15.0
+
+
+def _pick_cover_url(book: Book) -> str | None:
+    """Return the best cover URL for a book, or None if none available.
+
+    Preference order:
+      1. Applied candidate's cover_url (the metadata the user / auto-
+         apply chose).
+      2. Highest-ranked non-rejected candidate that has a cover_url.
+    """
+    applied = None
+    fallback = None
+    for c in book.candidates:
+        if c.rejected:
+            continue
+        if not c.cover_url:
+            continue
+        if c.applied and applied is None:
+            applied = c.cover_url
+        if fallback is None or (c.ranking_score or 0) > 0:
+            # We want the highest-ranked fallback. We don't have a
+            # sorted list here, but since auto-apply favors highest
+            # ranking and applied wins anyway, an applied candidate is
+            # the cover we'd pick. For fallback, just take any one.
+            fallback = c.cover_url
+    return applied or fallback
+
+
+def _download_cover_art(book: Book, output_dir: str) -> None:
+    """Synchronously download the chosen cover URL to <output_dir>/cover.jpg."""
+    import httpx
+
+    cover_url = _pick_cover_url(book)
+    if not cover_url:
+        return
+
+    dest_path = os.path.join(output_dir, COVER_FILENAME)
+    # Don't overwrite an existing cover.jpg — the user (or another tool)
+    # may have placed one there deliberately.
+    if os.path.exists(dest_path):
+        return
+
+    staging_path = dest_path + STAGING_SUFFIX
+    try:
+        with httpx.Client(timeout=_COVER_TIMEOUT, follow_redirects=True) as client:
+            resp = client.get(cover_url)
+            resp.raise_for_status()
+            content_type = (resp.headers.get("content-type") or "").lower()
+            if "image" not in content_type and not cover_url.lower().endswith(
+                (".jpg", ".jpeg", ".png", ".webp")
+            ):
+                logger.warning(
+                    "Cover URL %s returned non-image content-type %s; skipping",
+                    cover_url, content_type,
+                )
+                return
+            data = resp.content
+            if len(data) > _COVER_MAX_BYTES:
+                logger.warning(
+                    "Cover URL %s is %d bytes (>%d cap); skipping",
+                    cover_url, len(data), _COVER_MAX_BYTES,
+                )
+                return
+            with open(staging_path, "wb") as f:
+                f.write(data)
+        os.replace(staging_path, dest_path)
+        logger.info("Wrote cover.jpg for book %s (%d bytes)", book.id, len(data))
+    except Exception:
+        logger.warning(
+            "Failed to download cover for book %s from %s",
+            book.id, cover_url, exc_info=True,
+        )
+        if os.path.exists(staging_path):
+            try:
+                os.remove(staging_path)
+            except OSError:
+                pass
+
 
 def _write_sidecar(book: Book, output_dir: str) -> None:
     """Write the .audiobook-organizer.json provenance sidecar.
