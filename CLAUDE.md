@@ -54,7 +54,19 @@ frontend/src/
 6. **Auto-lookup** (`scanner.py`): ALL books get online lookup via Audible + iTunes + Google Books + OpenLibrary (threshold = 1.0)
 7. **Auto-apply** (`scanner.py`): Best lookup result applied if auto_match_score >= 0.85. Narrator applied from lookup results
 
-## Current Status (Last Updated: 2026-03-10)
+## Current Status (Last Updated: 2026-05-15)
+
+### Recent Changes (Session 2026-05-15)
+- **Loose audiobook file detection** (branch `claude/detect-books-outside-folders-KIXwl`):
+  - Scanner now treats every `.m4b` file as its own book regardless of how many sit in the same directory (the format is almost always one-file-per-book). Other audio formats (mp3, flac, ...) keep the existing 'folder = book' grouping for multi-file chapter sets — `.mp3` chapter sets are unaffected.
+  - **Main use case**: downloads dir full of unrelated single-file `.m4b` books — each now scans as its own book instead of getting lumped together or missed entirely.
+  - `parser.py`: added `parse_file_path(file_path)` — strips extension, parses just the filename via the leaf strategies. Intentionally ignores parent directory (loose files commonly sit in generic 'downloads'/'audiobooks' parents that would mislead nested-folder parsing).
+  - `scanner.py`: `_find_audiobook_folders` now returns mixed paths (folders + loose file paths). Loose files bypass the "deepest folder wins" filter. `_process_folder` dispatches to new `_process_loose_file` when handed a file path. Folder processor skips `.m4b` files so they aren't double-counted as chapters. `_group_multipart_books` skips loose files so `Part01.m4b` isn't mistaken for a multi-disc set.
+  - `ScannedFolder.folder_path` holds the file path itself for loose files; `folder_name` holds the filename. No schema changes — carry-forward, duplicate detection, and UI work unchanged.
+  - `LOOSE_FILE_EXTENSIONS = {".m4b"}` — easy to extend if needed.
+  - 13 new tests: 5 for `parse_file_path`, 8 for scanner detection (root loose files, multiple unrelated m4bs in downloads dir, mp3 chapter sets, mixed m4b+mp3, nested m4bs, loose-file processing).
+
+
 
 ### What's Working
 - Full scan pipeline: directory walk → folder parse → tag read → online lookup → DB records

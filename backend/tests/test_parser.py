@@ -10,6 +10,7 @@ from app.services.parser import (
     detect_edition,
     fuzzy_match,
     merge_with_tags,
+    parse_file_path,
     parse_folder_path,
 )
 
@@ -139,6 +140,35 @@ class TestParseFolderPath:
     def test_with_year(self):
         result = parse_folder_path("/audiobooks/Brandon Sanderson - The Final Empire (2006)")
         assert result.year == "2006"
+
+
+class TestParseFilePath:
+    def test_author_dash_title(self):
+        result = parse_file_path("/downloads/Brandon Sanderson - The Final Empire.m4b")
+        assert result.author == "Brandon Sanderson"
+        assert result.title == "The Final Empire"
+
+    def test_strips_extension(self):
+        result = parse_file_path("/downloads/The Final Empire.m4b")
+        assert result.title is not None
+        assert "m4b" not in (result.title or "").lower()
+
+    def test_with_year(self):
+        result = parse_file_path(
+            "/downloads/Brandon Sanderson - The Final Empire (2006).m4b"
+        )
+        assert result.year == "2006"
+
+    def test_ignores_parent_directory(self):
+        # The 'downloads' parent dir must NOT become the author —
+        # loose files often sit in generic library/downloads dirs.
+        result = parse_file_path("/downloads/The Final Empire.m4b")
+        assert result.author != "downloads"
+
+    def test_bare_filename(self):
+        result = parse_file_path("/anywhere/The Final Empire.m4b")
+        assert result.title is not None
+        assert result.confidence > 0
 
 
 class TestMergeWithTags:
