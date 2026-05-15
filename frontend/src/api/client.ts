@@ -204,6 +204,13 @@ export const bulkUpdateBooks = (
 export const exportBooks = async (scanId?: number) => {
   const params = scanId != null ? `?scan_id=${scanId}` : '';
   const resp = await fetch(`${BASE}/books/export${params}`, { cache: 'no-store' });
+  if (!resp.ok) {
+    // Backend may return JSON error or plain text — try JSON, fall back
+    // to status text so the caller's toast shows something meaningful
+    // instead of letting the export blob become "{"detail":"..."}".
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail || resp.statusText);
+  }
   return resp.json();
 };
 

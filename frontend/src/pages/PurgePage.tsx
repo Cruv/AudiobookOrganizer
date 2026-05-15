@@ -183,6 +183,9 @@ export default function PurgePage() {
                   type="checkbox"
                   checked={selected.has(book.id)}
                   onChange={() => toggleSelect(book.id)}
+                  // Stop click propagation so the outer card onClick
+                  // doesn't fire a SECOND toggle and cancel this one.
+                  onClick={(e) => e.stopPropagation()}
                   aria-label={`Select ${book.title}`}
                 />
                 <div className="flex-1 min-w-0">

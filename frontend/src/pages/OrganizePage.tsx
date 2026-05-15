@@ -182,6 +182,9 @@ export default function OrganizePage() {
                 type="checkbox"
                 checked={selected.has(book.id)}
                 onChange={() => toggleSelect(book.id)}
+                // Stop click propagation so the outer card onClick
+                // doesn't fire a SECOND toggle and cancel out this one.
+                onClick={(e) => e.stopPropagation()}
                 className="flex-shrink-0"
                 aria-label={`Select ${book.title}`}
               />

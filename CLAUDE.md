@@ -56,6 +56,23 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 4, v1.14.0 — PR 3 of multi-PR audit pass)
+- **Frontend performance**:
+  - **Code splitting** (`App.tsx`, `vite.config.ts`): post-auth pages (Scan/Review/Organize/Purge/Settings) now lazy-loaded via `React.lazy()` + `Suspense`. Vite `manualChunks` splits React, TanStack Query, and Lucide icons into separate vendor chunks for better long-term caching. Initial paint loads ~50 kB less JS.
+  - **Optimistic mutations**: `useConfirmBook`, `useUnconfirmBook`, `useLockBook`, `useUnlockBook` now patch the cached `PaginatedBooks` directly via `queryClient.setQueriesData` instead of invalidating `['books']` and refetching every variant. Every click is instant.
+  - **Debounced `usePreviewPattern`**: was firing `/api/settings/preview-pattern` on every keystroke. Now waits 300ms after the user stops typing.
+- **UX polish**:
+  - **Modal focus trap** (`components/ui/Modal.tsx`): proper Tab/Shift+Tab wraparound inside the dialog, plus restores focus to the opener element on close.
+  - **`window.confirm` → `ConfirmDialog`** (`pages/ReviewPage.tsx`): "Reset All Confirmations" now uses the design-system dialog with Escape support, focus trap, and consistent styling.
+  - **Nested onClick fix** on Organize/Purge cards: checkbox `onClick={(e) => e.stopPropagation()}` so the outer card click doesn't fire a second toggle and cancel the first.
+  - **`exportBooks` checks `resp.ok`**: HTTP errors now throw instead of silently embedding `{"detail":"..."}` in the downloaded export.
+  - **Toast a11y + HMR-safe IDs** (`components/Toast.tsx`): wrapper has `aria-live="polite"`, errors have `role="alert"`. ID counter moved to a per-provider `useRef` so HMR no longer produces duplicate React keys.
+  - **`useScan` invalidates the scans list + books on completion**: parent list and ReviewPage now refresh automatically when a scan transitions out of `running`.
+  - **SearchModal**: result cards disabled (`opacity-50 pointer-events-none`) while a previous apply is in flight, preventing race where two clicks apply two different metadata sets on top.
+  - **CandidatesModal per-row busy**: only the row whose mutation is in flight shows the loading state; other rows stay interactive.
+  - **`cover_url` onError fallback** (SearchModal, CandidatesModal): broken cover images hide themselves instead of showing the browser's broken-image icon.
+- No new tests in this PR (most changes are UI behavior). Existing 158 tests still pass; TS type-check clean; Vite build now produces split chunks (largest non-vendor: ReviewPage at 23.66 kB / 7.03 kB gzipped).
+
 ### Recent Changes (Session 2026-05-15 part 3, v1.13.0 — PR 2 of multi-PR audit pass)
 - **Backend performance**:
   - **Parallel lookup providers** (`services/lookup.py`): `lookup_book` now runs Audible/Google/OpenLibrary/iTunes via `asyncio.gather`. Total wall-clock is `max(provider_time)` instead of sum — ~2.5x faster lookup phase.

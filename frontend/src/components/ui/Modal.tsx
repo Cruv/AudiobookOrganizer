@@ -11,26 +11,69 @@ interface ModalProps {
   ariaDescribedBy?: string;
 }
 
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 export default function Modal({ title, subtitle, onClose, children, footer, maxWidth = 'max-w-lg', ariaDescribedBy }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Save the element that opened the modal so we can restore focus
+    // on close (otherwise the user's keyboard position is lost).
+    const opener = document.activeElement as HTMLElement | null;
+
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const el = dialogRef.current;
+      if (!el) return;
+      const focusable = Array.from(
+        el.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      ).filter((node) => node.offsetParent !== null);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey) {
+        if (active === first || !el.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (active === last || !el.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
 
-  // Trap focus inside modal
-  useEffect(() => {
+    // Focus the first focusable on mount.
     const el = dialogRef.current;
-    if (!el) return;
-    const focusable = el.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable.length > 0) focusable[0].focus();
-  }, []);
+    if (el) {
+      const focusable = el.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (focusable.length > 0) focusable[0].focus();
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handler);
+      // Restore focus to the element that opened the modal so the
+      // user's keyboard position is preserved on close.
+      if (opener && typeof opener.focus === 'function') {
+        try {
+          opener.focus();
+        } catch {
+          // ignore — opener may no longer be in the DOM
+        }
+      }
+    };
+  }, [onClose]);
 
   return (
     <div

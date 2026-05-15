@@ -1,18 +1,24 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Layout from '@/components/Layout';
 import { ToastProvider } from '@/components/Toast';
-import ScanPage from '@/pages/ScanPage';
-import ReviewPage from '@/pages/ReviewPage';
-import OrganizePage from '@/pages/OrganizePage';
-import PurgePage from '@/pages/PurgePage';
-import SettingsPage from '@/pages/SettingsPage';
+import { PageSkeleton } from '@/components/ui/Skeleton';
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import { getAuthStatus } from '@/api/client';
 import type { AuthStatus } from '@/types';
+
+// Lazy-load the post-auth pages so the initial bundle stays small.
+// LoginPage / RegisterPage stay eager because they're the first thing
+// most users see, and the bundle savings would just push their paint
+// behind an extra HTTP request.
+const ScanPage = lazy(() => import('@/pages/ScanPage'));
+const ReviewPage = lazy(() => import('@/pages/ReviewPage'));
+const OrganizePage = lazy(() => import('@/pages/OrganizePage'));
+const PurgePage = lazy(() => import('@/pages/PurgePage'));
+const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -118,15 +124,65 @@ function AuthGate() {
   }
 
   // Logged in — show app
+  const fallback = (
+    <div className="p-6">
+      <PageSkeleton />
+    </div>
+  );
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<Layout username={auth.username} isAdmin={auth.is_admin} />}>
-          <Route path="/" element={<ErrorBoundary><ScanPage /></ErrorBoundary>} />
-          <Route path="/review" element={<ErrorBoundary><ReviewPage /></ErrorBoundary>} />
-          <Route path="/organize" element={<ErrorBoundary><OrganizePage /></ErrorBoundary>} />
-          <Route path="/purge" element={<ErrorBoundary><PurgePage /></ErrorBoundary>} />
-          <Route path="/settings" element={<ErrorBoundary><SettingsPage isAdmin={auth.is_admin} /></ErrorBoundary>} />
+          <Route
+            path="/"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <ScanPage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/review"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <ReviewPage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/organize"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <OrganizePage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/purge"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <PurgePage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <SettingsPage isAdmin={auth.is_admin} />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
         </Route>
       </Routes>
     </BrowserRouter>

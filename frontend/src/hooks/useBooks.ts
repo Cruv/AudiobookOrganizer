@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '@/api/client';
+import type { Book, PaginatedBooks } from '@/types';
 
 export function useBooks(params?: {
   scan_id?: number;
@@ -18,6 +19,32 @@ export function useBooks(params?: {
     queryKey: ['books', params],
     queryFn: () => api.getBooks(params),
     staleTime: 0,
+  });
+}
+
+/**
+ * Patch a single book inside every cached PaginatedBooks result. Used
+ * for optimistic confirm/lock/unconfirm/unlock — avoids refetching the
+ * whole list on every click.
+ *
+ * The TanStack Query queryClient.setQueriesData lets us touch every
+ * cached variant of ['books', params] in one call. We DON'T invalidate
+ * afterwards because the backend response is the source of truth and
+ * we'll patch again with the real result.
+ */
+function patchBookInCaches(
+  qc: ReturnType<typeof useQueryClient>,
+  book: Book,
+) {
+  qc.setQueriesData<PaginatedBooks>({ queryKey: ['books'] }, (old) => {
+    if (!old || !old.items) return old;
+    let touched = false;
+    const items = old.items.map((b) => {
+      if (b.id !== book.id) return b;
+      touched = true;
+      return { ...b, ...book };
+    });
+    return touched ? { ...old, items } : old;
   });
 }
 
@@ -42,7 +69,7 @@ export function useConfirmBook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.confirmBook(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+    onSuccess: (book) => patchBookInCaches(qc, book),
   });
 }
 
@@ -58,7 +85,7 @@ export function useUnconfirmBook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.unconfirmBook(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+    onSuccess: (book) => patchBookInCaches(qc, book),
   });
 }
 
@@ -153,7 +180,7 @@ export function useLockBook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.lockBook(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+    onSuccess: (book) => patchBookInCaches(qc, book),
   });
 }
 
@@ -161,7 +188,7 @@ export function useUnlockBook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => api.unlockBook(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+    onSuccess: (book) => patchBookInCaches(qc, book),
   });
 }
 

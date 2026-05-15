@@ -90,19 +90,29 @@ export default function SearchModal({ book, onClose }: Props) {
         <div className="space-y-2">
           {results.map((result, idx) => (
             <div
-              key={idx}
-              className="flex items-start gap-3 p-3 rounded border cursor-pointer hover:bg-[var(--color-surface-hover)] transition-colors"
+              key={`${result.provider}-${idx}`}
+              className={`flex items-start gap-3 p-3 rounded border transition-colors ${
+                applyLookup.isPending
+                  ? 'opacity-50 cursor-wait pointer-events-none'
+                  : 'cursor-pointer hover:bg-[var(--color-surface-hover)]'
+              }`}
               style={{ borderColor: 'var(--color-border)' }}
-              onClick={() => handleApply(result.provider, idx)}
+              onClick={() => !applyLookup.isPending && handleApply(result.provider, idx)}
               role="button"
-              tabIndex={0}
-              onKeyDown={(e) => e.key === 'Enter' && handleApply(result.provider, idx)}
+              tabIndex={applyLookup.isPending ? -1 : 0}
+              aria-disabled={applyLookup.isPending}
+              onKeyDown={(e) =>
+                !applyLookup.isPending && e.key === 'Enter' && handleApply(result.provider, idx)
+              }
             >
               {result.cover_url && (
                 <img
                   src={result.cover_url}
                   alt=""
                   className="w-12 h-16 object-cover rounded flex-shrink-0"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
                 />
               )}
               <div className="flex-1 min-w-0">

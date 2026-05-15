@@ -156,6 +156,7 @@ export default function ReviewPage() {
   const [removingBook, setRemovingBook] = useState<Book | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const toggleSelected = (id: number) => {
     setSelectedIds((prev) => {
@@ -209,7 +210,7 @@ export default function ReviewPage() {
   };
 
   const handleResetAllConfirmations = () => {
-    if (!confirm('Reset all confirmations for this scan?')) return;
+    setShowResetConfirm(false);
     unconfirmBatch.mutate(
       { scan_id: scanId },
       {
@@ -266,7 +267,7 @@ export default function ReviewPage() {
             size="sm"
             icon={<XCircle size={14} />}
             loading={unconfirmBatch.isPending}
-            onClick={handleResetAllConfirmations}
+            onClick={() => setShowResetConfirm(true)}
           >
             Reset All
           </Button>
@@ -629,6 +630,21 @@ export default function ReviewPage() {
             setShowBulkEdit(false);
             clearSelection();
           }}
+        />
+      )}
+
+      {showResetConfirm && (
+        <ConfirmDialog
+          title="Reset all confirmations?"
+          message={
+            scanId
+              ? `Unconfirm every book in scan #${scanId}. They'll stay in the library but go back to needing review before they can be organized.`
+              : "Unconfirm every book in the library. They'll all need review before they can be organized again."
+          }
+          confirmLabel="Reset Confirmations"
+          confirmColor="var(--color-danger)"
+          onConfirm={handleResetAllConfirmations}
+          onCancel={() => setShowResetConfirm(false)}
         />
       )}
 

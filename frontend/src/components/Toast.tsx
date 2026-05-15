@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useState } from 'react';
+import { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { CheckCircle, X, AlertCircle } from 'lucide-react';
 
 interface ToastItem {
-  id: number;
+  id: string;
   message: string;
   type: 'success' | 'error';
 }
@@ -14,13 +14,16 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-let nextId = 0;
-
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  // Per-provider counter (was a module-level let, which collided
+  // across HMR reloads and produced duplicate React keys for toasts
+  // that crossed a reload boundary).
+  const counterRef = useRef(0);
 
   const addToast = useCallback((message: string, type: 'success' | 'error') => {
-    const id = nextId++;
+    counterRef.current += 1;
+    const id = `${Date.now()}-${counterRef.current}`;
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -30,17 +33,22 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const success = useCallback((message: string) => addToast(message, 'success'), [addToast]);
   const error = useCallback((message: string) => addToast(message, 'error'), [addToast]);
 
-  const dismiss = (id: number) => {
+  const dismiss = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
   return (
     <ToastContext.Provider value={{ success, error }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
+      <div
+        className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         {toasts.map((toast) => (
           <div
             key={toast.id}
+            role={toast.type === 'error' ? 'alert' : 'status'}
             className="flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm min-w-[280px] animate-[slideIn_0.2s_ease-out]"
             style={{
               backgroundColor: toast.type === 'success' ? '#166534' : '#991b1b',
@@ -49,7 +57,12 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           >
             {toast.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
             <span className="flex-1">{toast.message}</span>
-            <button onClick={() => dismiss(toast.id)} className="opacity-60 hover:opacity-100">
+            <button
+              type="button"
+              onClick={() => dismiss(toast.id)}
+              className="opacity-60 hover:opacity-100"
+              aria-label="Dismiss notification"
+            >
               <X size={14} />
             </button>
           </div>

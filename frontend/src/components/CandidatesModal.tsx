@@ -112,15 +112,25 @@ export default function CandidatesModal({ book, onClose }: Props) {
 
       {candidates && candidates.length > 0 && (
         <div className="space-y-2">
-          {candidates.map((c) => (
-            <CandidateRow
-              key={c.id}
-              candidate={c}
-              onApply={handleApply}
-              onReject={handleReject}
-              busy={applyCand.isPending || rejectCand.isPending}
-            />
-          ))}
+          {candidates.map((c) => {
+            // Per-row busy: only the row whose mutation is currently
+            // in flight should show a loading indicator. Other rows
+            // stay interactive (the previous global busy flag locked
+            // every row out whenever any one of them was applying).
+            const applyingThis =
+              applyCand.isPending && applyCand.variables?.candidateId === c.id;
+            const rejectingThis =
+              rejectCand.isPending && rejectCand.variables?.candidateId === c.id;
+            return (
+              <CandidateRow
+                key={c.id}
+                candidate={c}
+                onApply={handleApply}
+                onReject={handleReject}
+                busy={applyingThis || rejectingThis}
+              />
+            );
+          })}
         </div>
       )}
     </Modal>
@@ -152,6 +162,9 @@ function CandidateRow({ candidate, onApply, onReject, busy }: RowProps) {
           src={candidate.cover_url}
           alt=""
           className="w-12 h-16 object-cover rounded flex-shrink-0"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none';
+          }}
         />
       )}
       <div className="flex-1 min-w-0">
