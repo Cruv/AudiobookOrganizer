@@ -21,8 +21,22 @@ from app.services.parser import (
     clean_narrator,
     detect_edition,
     merge_with_tags,
+    parse_file_path,
     parse_folder_path,
 )
+
+# .m4b files are almost always single-file complete audiobooks (per the
+# format's intended use). We treat every .m4b as its own book regardless
+# of how many sit in the same directory, so a downloads folder full of
+# unrelated m4bs is parsed correctly. Other formats (mp3, flac, etc.)
+# still use the folder = book grouping since they're commonly used for
+# multi-file chapter sets.
+LOOSE_FILE_EXTENSIONS = {".m4b"}
+
+
+def _is_loose_audiobook_file(filename: str) -> bool:
+    _, ext = os.path.splitext(filename)
+    return ext.lower() in LOOSE_FILE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -188,11 +202,21 @@ async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None
 
 
 def _find_audiobook_folders(source_dir: str) -> list[str]:
-    """Walk source_dir and find all folders containing audio files.
+    """Walk source_dir and find every audiobook unit to scan.
 
-    The deepest folder containing audio files is considered the audiobook folder.
+    Returns a mixed list of paths. Each path is either:
+    - A directory containing audio files (treated as one book; all
+      files inside are chapters), or
+    - An absolute path to a loose audiobook file (extensions in
+      LOOSE_FILE_EXTENSIONS — currently `.m4b`). Each loose file is
+      treated as its own book.
+
+    Folder paths follow "deepest wins" (a parent folder is dropped if a
+    descendant folder also has audio). Loose-file paths are never
+    filtered out by that rule; they always represent their own book.
     """
-    audiobook_folders: list[str] = []
+    folder_paths: list[str] = []
+    loose_file_paths: list[str] = []
     source_depth = source_dir.rstrip(os.sep).count(os.sep)
 
     for dirpath, dirnames, filenames in os.walk(source_dir):
@@ -202,33 +226,50 @@ def _find_audiobook_folders(source_dir: str) -> list[str]:
             dirnames.clear()
             continue
 
-        # Check if this folder contains audio files
         audio_files = [f for f in filenames if is_audio_file(f)]
-        if audio_files:
-            audiobook_folders.append(dirpath)
+        if not audio_files:
+            continue
 
-    # Remove parent folders if a child folder also has audio files
-    # (prefer the deepest folder)
-    filtered = []
-    sorted_folders = sorted(audiobook_folders)
-    for folder in sorted_folders:
-        # Check if any already-added folder is a parent of this one
+        loose = [f for f in audio_files if _is_loose_audiobook_file(f)]
+        other = [f for f in audio_files if not _is_loose_audiobook_file(f)]
+
+        for f in loose:
+            loose_file_paths.append(os.path.join(dirpath, f))
+
+        # Only register a folder unit if it has non-loose audio files
+        # left to group as chapters. A directory whose only audio is a
+        # bunch of m4bs is already fully represented by the loose units
+        # above and shouldn't also produce a folder-level Book.
+        if other:
+            folder_paths.append(dirpath)
+
+    # Apply "deepest folder wins" only to folder units. Loose files are
+    # unaffected — they always represent their own book.
+    filtered_folders: list[str] = []
+    for folder in sorted(folder_paths):
         parents_to_remove = []
-        for existing in filtered:
+        for existing in filtered_folders:
             normalized_existing = existing.rstrip(os.sep) + os.sep
             if folder.startswith(normalized_existing):
-                # This folder is deeper - remove parent and add this one
                 parents_to_remove.append(existing)
 
         for parent in parents_to_remove:
-            filtered.remove(parent)
-        filtered.append(folder)
+            filtered_folders.remove(parent)
+        filtered_folders.append(folder)
 
-    return filtered
+    return filtered_folders + loose_file_paths
 
 
 def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
-    """Process a single audiobook folder: parse name, read tags, create records."""
+    """Process a single audiobook unit: parse name, read tags, create records.
+
+    Despite the name, accepts either a directory of audio files
+    (existing behavior) or a path to a single loose audiobook file —
+    dispatches to `_process_loose_file` in the latter case.
+    """
+    if is_audio_file(folder_path):
+        return _process_loose_file(folder_path, scan, db)
+
     folder_name = os.path.basename(folder_path)
 
     # Create ScannedFolder record
@@ -241,11 +282,17 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     db.add(scanned_folder)
     db.flush()
 
-    # Find all audio files
+    # Find all audio files. Skip loose-file formats (e.g. .m4b) —
+    # they're handled as their own books via _process_loose_file, so
+    # we mustn't double-count them as chapters of this folder.
     audio_files = []
     for filename in sorted(os.listdir(folder_path)):
         filepath = os.path.join(folder_path, filename)
-        if os.path.isfile(filepath) and is_audio_file(filepath):
+        if (
+            os.path.isfile(filepath)
+            and is_audio_file(filepath)
+            and not _is_loose_audiobook_file(filename)
+        ):
             audio_files.append((filepath, filename))
 
     if not audio_files:
@@ -339,6 +386,92 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
     return book
 
 
+def _process_loose_file(file_path: str, scan: Scan, db: Session) -> Book | None:
+    """Process a single loose audiobook file (e.g. a standalone .m4b).
+
+    Creates one Book + one BookFile. The ScannedFolder row uses the file
+    path itself in `folder_path` and the filename in `folder_name` so
+    the existing UI, carry-forward, and duplicate-detection logic all
+    keep working without schema changes.
+    """
+    filename = os.path.basename(file_path)
+    parent_dir = os.path.dirname(file_path)
+
+    scanned_folder = ScannedFolder(
+        scan_id=scan.id,
+        folder_path=file_path,
+        folder_name=filename,
+        status="pending",
+    )
+    db.add(scanned_folder)
+    db.flush()
+
+    if not os.path.isfile(file_path):
+        scanned_folder.status = "skipped"
+        scanned_folder.error_message = "File not found"
+        return None
+
+    # Parse metadata from the filename
+    parsed = parse_file_path(file_path)
+
+    # Read tags from this single file
+    tags = read_tags(file_path)
+
+    # Edition detection — checks the file's path for "Graphic Audio",
+    # GA markers in the filename, and tag-based signals.
+    edition = detect_edition(file_path, filename, tags)
+
+    parsed = merge_with_tags(parsed, tags)
+    if edition:
+        parsed.edition = edition
+
+    parsed.narrator = clean_narrator(parsed.narrator, edition)
+
+    book = Book(
+        scanned_folder_id=scanned_folder.id,
+        title=parsed.title,
+        author=parsed.author,
+        series=parsed.series,
+        series_position=parsed.series_position,
+        year=parsed.year,
+        narrator=parsed.narrator,
+        edition=parsed.edition,
+        source=parsed.source,
+        confidence=parsed.confidence,
+        parse_confidence=parsed.confidence,
+        match_confidence=0.0,
+    )
+    db.add(book)
+    db.flush()
+
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    file_size = os.path.getsize(file_path)
+
+    book_file = BookFile(
+        book_id=book.id,
+        original_path=file_path,
+        filename=filename,
+        file_size=file_size,
+        file_format=ext,
+        tag_title=tags.get("title"),
+        tag_author=tags.get("author"),
+        tag_album=tags.get("album"),
+        tag_year=tags.get("year"),
+        tag_track=tags.get("track"),
+        tag_narrator=tags.get("narrator"),
+        destination_path=None,
+        copy_status="pending",
+    )
+    db.add(book_file)
+
+    scanned_folder.status = "parsed"
+    logger.info(
+        "Scan: loose audiobook file %r in %s -> %r by %r",
+        filename, parent_dir, book.title, book.author,
+    )
+    return book
+
+
 def _group_multipart_books(scan: Scan, db: Session) -> None:
     """Group multi-part audiobook folders into single book records.
 
@@ -370,6 +503,10 @@ def _group_multipart_books(scan: Scan, db: Session) -> None:
         if not book.scanned_folder:
             continue
         folder_path = book.scanned_folder.folder_path
+        # Loose audiobook files (e.g. /downloads/Part 01.m4b) aren't
+        # multi-part discs of a chaptered book — each .m4b stands alone.
+        if is_audio_file(folder_path):
+            continue
         leaf_name = os.path.basename(folder_path)
         if MULTI_PART_LEAF_PATTERN.match(leaf_name):
             parent_dir = os.path.dirname(folder_path)

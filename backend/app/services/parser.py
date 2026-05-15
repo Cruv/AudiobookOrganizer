@@ -483,6 +483,22 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
     return None
 
 
+def parse_file_path(file_path: str) -> ParsedMetadata:
+    """Parse a loose audiobook file (e.g. standalone .m4b) for metadata.
+
+    Strips the audio extension and parses the filename through the leaf
+    strategies. The containing directory is intentionally ignored —
+    loose audiobook files typically live in a downloads/library root
+    whose name ('downloads', 'audiobooks', ...) would mislead the
+    nested-folder strategy into reporting it as an author.
+    """
+    import os as _os
+
+    base, _ext = _os.path.splitext(file_path)
+    leaf = base.replace("\\", "/").rstrip("/").split("/")[-1]
+    return parse_folder_path(leaf)
+
+
 def parse_folder_path(folder_path: str) -> ParsedMetadata:
     """Parse an audiobook folder path to extract metadata.
 
