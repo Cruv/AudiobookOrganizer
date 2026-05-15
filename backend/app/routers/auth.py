@@ -30,12 +30,18 @@ def _get_client_ip(request: Request) -> str:
 
 
 def _check_rate_limit(client_ip: str) -> None:
-    """Raise 429 if too many failed login attempts from this IP."""
+    """Raise 429 if too many failed login attempts from this IP.
+
+    Prunes empty entries so the dict doesn't accumulate one key per
+    unique attacker IP forever.
+    """
     now = time.monotonic()
     attempts = _login_attempts.get(client_ip, [])
-    # Prune old attempts
     attempts = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
-    _login_attempts[client_ip] = attempts
+    if attempts:
+        _login_attempts[client_ip] = attempts
+    else:
+        _login_attempts.pop(client_ip, None)
     if len(attempts) >= MAX_LOGIN_ATTEMPTS:
         raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
 
@@ -251,6 +257,26 @@ def _require_admin(db: Session, session_token: str | None = Cookie(None)) -> Use
     if not user or not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+def require_admin(
+    db: Session = Depends(get_db),
+    session_token: str | None = Cookie(None),
+) -> User:
+    """FastAPI dependency that enforces admin access.
+
+    Use as `Depends(require_admin)` on any endpoint that mutates global
+    state (settings, Audible auth, scan deletion). The auth middleware
+    only validates the session — admin status is per-route.
+
+    Importantly: when no users exist yet (first-run before initial
+    registration), the auth middleware lets all /api/* requests through
+    so the AuthGate can render. To prevent privilege escalation in that
+    window, this dep also rejects when no users exist.
+    """
+    if not db.query(User).first():
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return _require_admin(db, session_token)
 
 
 @router.post("/invites", response_model=InviteResponse)

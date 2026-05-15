@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings as app_settings
 from app.database import get_db
 from app.models.settings import UserSetting
+from app.routers.auth import require_admin
 from app.schemas.settings import (
     AudibleAuthorize,
     AudibleStatus,
@@ -81,8 +82,13 @@ def get_settings(db: Session = Depends(get_db)):
 
 
 @router.put("", response_model=SettingsResponse)
-def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
-    """Update settings."""
+def update_settings(
+    body: SettingsUpdate,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_admin),
+):
+    """Update settings. Admin only — output_root and registration_open
+    affect everyone using the instance."""
     update_data = body.model_dump(exclude_unset=True)
 
     for key, value in update_data.items():
@@ -170,12 +176,29 @@ MAX_AUDIBLE_SESSIONS = 10
 
 @router.get("/audible/status", response_model=AudibleStatus)
 def audible_status(db: Session = Depends(get_db)):
-    """Check if Audible is connected."""
+    """Check if Audible is connected.
+
+    File existence alone is misleading: a corrupted or partial auth
+    file (truncated by a prior crash) still answers "connected" but
+    every lookup fails minutes later. We do a cheap Authenticator
+    load — no network — to confirm the file is actually usable.
+    """
     _cleanup_stale_sessions()
-    connected = os.path.exists(AUDIBLE_AUTH_FILE)
     locale_setting = db.query(UserSetting).filter(UserSetting.key == "audible_locale").first()
     locale = locale_setting.value if locale_setting else "us"
-    return AudibleStatus(connected=connected, locale=locale)
+
+    if not os.path.exists(AUDIBLE_AUTH_FILE):
+        return AudibleStatus(connected=False, locale=locale)
+
+    try:
+        import audible
+        audible.Authenticator.from_file(AUDIBLE_AUTH_FILE)
+        return AudibleStatus(connected=True, locale=locale)
+    except Exception as e:
+        logger.warning(
+            "Audible auth file present but unreadable: %s", type(e).__name__
+        )
+        return AudibleStatus(connected=False, locale=locale)
 
 
 class AudibleLoginUrlResponse(BaseModel):
@@ -184,8 +207,10 @@ class AudibleLoginUrlResponse(BaseModel):
 
 
 @router.post("/audible/login-url", response_model=AudibleLoginUrlResponse)
-def audible_login_url(locale: str = "us"):
+def audible_login_url(locale: str = "us", _admin = Depends(require_admin)):
     """Generate Audible login URL for external browser authorization.
+
+    Admin only — Audible is a shared, instance-wide credential.
 
     Starts from_login_external() in a background thread. The thread's callback
     captures the login URL, then blocks until the authorize endpoint provides
@@ -280,8 +305,14 @@ def audible_login_url(locale: str = "us"):
 
 
 @router.post("/audible/authorize", response_model=AudibleStatus)
-def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
+def audible_authorize(
+    body: AudibleAuthorize,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_admin),
+):
     """Complete Audible authorization with the redirect URL from browser.
+
+    Admin only — Audible is a shared, instance-wide credential.
 
     Provides the response URL to the waiting background thread, which completes
     the from_login_external() OAuth flow.
@@ -350,8 +381,9 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
 
 
 @router.delete("/audible/disconnect")
-def audible_disconnect():
-    """Disconnect Audible by removing auth file."""
+def audible_disconnect(_admin = Depends(require_admin)):
+    """Disconnect Audible by removing auth file. Admin only — Audible
+    is a shared, instance-wide credential."""
     if os.path.exists(AUDIBLE_AUTH_FILE):
         os.remove(AUDIBLE_AUTH_FILE)
         logger.info("Audible auth file removed (disconnected)")

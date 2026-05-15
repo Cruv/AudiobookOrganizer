@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
@@ -128,21 +130,47 @@ def execute_organize(
     return {"detail": f"Organizing {len(books)} books", "book_ids": book_ids}
 
 
+_logger = logging.getLogger(__name__)
+
+
 def _organize_books(book_ids: list[int], pattern: str, root: str) -> None:
-    """Background task to organize books."""
+    """Background task to organize books.
+
+    Each book is wrapped in its own try/except so a single failure
+    (permission denied, disk full mid-copy, path collision) doesn't
+    strand the remaining books in `organize_status="copying"` forever
+    — which previously left the frontend spinner running indefinitely
+    while no further work was happening.
+    """
     from app.database import SessionLocal
 
     db = SessionLocal()
     try:
         for book_id in book_ids:
-            book = (
-                db.query(Book)
-                .options(joinedload(Book.files), joinedload(Book.scanned_folder))
-                .filter(Book.id == book_id)
-                .first()
-            )
-            if book:
+            try:
+                book = (
+                    db.query(Book)
+                    .options(joinedload(Book.files), joinedload(Book.scanned_folder))
+                    .filter(Book.id == book_id)
+                    .first()
+                )
+                if not book:
+                    continue
                 organize_book(book, pattern, root, db)
+            except Exception as e:
+                _logger.exception("Organize failed for book %s", book_id)
+                try:
+                    db.rollback()
+                    stuck = db.query(Book).filter(Book.id == book_id).first()
+                    if stuck and stuck.organize_status == "copying":
+                        stuck.organize_status = "failed"
+                        db.commit()
+                except Exception:
+                    _logger.warning(
+                        "Could not mark book %s as failed after organize error: %s",
+                        book_id, type(e).__name__,
+                    )
+                    db.rollback()
     finally:
         db.close()
 

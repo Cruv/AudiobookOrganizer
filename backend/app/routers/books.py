@@ -464,6 +464,39 @@ def unconfirm_book(book_id: int, db: Session = Depends(get_db)):
     return resp
 
 
+@router.delete("/{book_id}")
+def delete_book(book_id: int, db: Session = Depends(get_db)):
+    """Remove a book entry from the database.
+
+    Use to clean up orphan records — e.g. a book whose source files were
+    deleted externally so purge verification keeps failing, or a bad
+    scan result the user doesn't want re-detected.
+
+    Deletes the Book (cascades BookFiles + LookupCandidates) AND the
+    associated ScannedFolder. Removing the ScannedFolder is important:
+    otherwise the next carry-forward scan would re-process this folder
+    and recreate the same orphan book.
+
+    Does NOT touch any files on disk. Original files and any destination
+    copies are left exactly as they are.
+    """
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.scanned_folder))
+        .filter(Book.id == book_id)
+        .first()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    scanned_folder = book.scanned_folder
+    db.delete(book)
+    if scanned_folder is not None:
+        db.delete(scanned_folder)
+    db.commit()
+    return {"detail": "Book removed"}
+
+
 @router.post("/unconfirm-batch")
 def unconfirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
     """Batch unconfirm books by IDs, confidence threshold, or all."""

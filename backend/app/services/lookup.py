@@ -650,6 +650,12 @@ def _cache_key(query: str, provider: str) -> str:
 def _get_cached(query: str, provider: str, db: Session) -> list[LookupResult] | None:
     """Get cached lookup results if available and not expired.
 
+    SQLite stores `DateTime` columns as naive strings, so reading
+    `cached.expires_at` returns a naive datetime even though we wrote
+    an aware one. Comparing naive vs aware raises TypeError, which used
+    to be swallowed by _safe_provider, silently turning every cache hit
+    into a fresh API call. Normalize to aware-UTC on read.
+
     If a cache row exists but can't be decoded (JSON malformed, or the
     LookupResult schema has changed since the row was written), treat
     it as a miss and discard the row instead of letting the exception
@@ -657,7 +663,15 @@ def _get_cached(query: str, provider: str, db: Session) -> list[LookupResult] | 
     """
     key = _cache_key(query, provider)
     cached = db.query(LookupCache).filter(LookupCache.query_hash == key).first()
-    if cached and cached.expires_at > datetime.now(timezone.utc):
+    if cached is None:
+        return None
+
+    expires_at = cached.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+
+    if expires_at > now:
         try:
             data = json.loads(cached.response_json)
             return [LookupResult(**item) for item in data]
@@ -672,9 +686,14 @@ def _get_cached(query: str, provider: str, db: Session) -> list[LookupResult] | 
             except Exception:
                 db.rollback()
             return None
-    if cached and cached.expires_at <= datetime.now(timezone.utc):
+
+    # Expired — best-effort cleanup, but don't break the lookup if the
+    # delete fails (the row will just re-expire next time).
+    try:
         db.delete(cached)
         db.commit()
+    except Exception:
+        db.rollback()
     return None
 
 

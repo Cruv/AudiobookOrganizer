@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ShieldCheck, Trash2, FolderOutput, CheckCircle, AlertTriangle } from 'lucide-react';
-import { useBooks } from '@/hooks/useBooks';
+import { ShieldCheck, Trash2, FolderOutput, CheckCircle, AlertTriangle, X } from 'lucide-react';
+import { useBooks, useDeleteBook } from '@/hooks/useBooks';
 import * as api from '@/api/client';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
@@ -15,11 +15,13 @@ export default function PurgePage() {
   });
   const books = booksData?.items;
   const toast = useToast();
+  const deleteBook = useDeleteBook();
 
   const [verifications, setVerifications] = useState<Map<number, PurgeVerifyItem>>(new Map());
   const [isVerifying, setIsVerifying] = useState(false);
   const [isPurging, setIsPurging] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [removeTargetId, setRemoveTargetId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
   const toggleSelect = (id: number) => {
@@ -62,6 +64,29 @@ export default function PurgePage() {
       toast.error('Failed to purge files');
     } finally {
       setIsPurging(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    if (removeTargetId == null) return;
+    const id = removeTargetId;
+    setRemoveTargetId(null);
+    try {
+      await deleteBook.mutateAsync(id);
+      // Drop any stale state for this id.
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setVerifications((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      toast.success('Book removed from list. Files on disk were not touched.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove book');
     }
   };
 
@@ -175,6 +200,7 @@ export default function PurgePage() {
                     )}
                     <span
                       className="text-xs px-2 py-0.5 rounded"
+                      title={v.verified ? undefined : v.missing_files.join('\n')}
                       style={{
                         backgroundColor: v.verified ? '#166534' : '#991b1b',
                         color: v.verified ? '#86efac' : '#fca5a5',
@@ -184,6 +210,18 @@ export default function PurgePage() {
                     </span>
                   </div>
                 )}
+                <button
+                  type="button"
+                  className="flex-shrink-0 p-1 rounded hover:bg-red-900/40"
+                  title="Remove this entry from the list (does not touch files on disk)"
+                  aria-label={`Remove ${book.title || 'book'} from list`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRemoveTargetId(book.id);
+                  }}
+                >
+                  <X size={14} style={{ color: 'var(--color-text-muted)' }} />
+                </button>
               </div>
             </Card>
           );
@@ -206,6 +244,17 @@ export default function PurgePage() {
           confirmColor="var(--color-danger)"
           onConfirm={handlePurge}
           onCancel={() => setShowConfirm(false)}
+        />
+      )}
+
+      {removeTargetId != null && (
+        <ConfirmDialog
+          title="Remove from list?"
+          message="This removes the book entry from the database so it no longer shows up in your library. Files on disk are NOT touched — both originals and any organized copies stay exactly where they are. Use this for stuck records where files were already cleaned up outside the app."
+          confirmLabel="Remove Entry"
+          confirmColor="var(--color-danger)"
+          onConfirm={handleRemove}
+          onCancel={() => setRemoveTargetId(null)}
         />
       )}
     </div>

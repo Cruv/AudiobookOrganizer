@@ -56,6 +56,20 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 2, v1.12.0 — PR 1 of multi-PR audit pass)
+- **Critical bug fixes + purge bug + delete-book endpoint** (branch `claude/naughty-driscoll-a6ebe8`):
+  - **Lookup cache silent defeat** (`services/lookup.py`): `LookupCache.expires_at` is a naive `DateTime`; comparing to `datetime.now(timezone.utc)` raised `TypeError`, swallowed by `_safe_provider`, so every cache hit became a fresh API call. Normalize naive → aware on read. Re-scans are now ~4x faster.
+  - **Purge bug** when files deleted externally (`services/purger.py`, `routers/books.py`, frontend): missing originals no longer block verification or purge — purge gracefully skips deleted files and still marks the book purged. New `purge_book(force=True)` bypasses verification for advanced flows. New `DELETE /api/books/{id}` endpoint removes a book + its `ScannedFolder` (so future scans don't re-import the orphan). Files on disk are NOT touched.
+  - **Remove buttons**: `Trash2` icon on every ReviewPage row + small `X` on every PurgePage row. Confirmation dialog explains "files on disk are NOT touched."
+  - **OrganizePage stale closure**: poll used `setInterval` with a stale `books` closure; the `pending` filter dropped in-flight books, so the first tick saw an empty `remaining` and falsely declared completion. Rewritten as `useEffect` polling per-book `/api/organize/status/{id}` — closure refreshes every render.
+  - **AuthGate fallback**: `/api/auth/status` fetch failures used to fall through to `has_users: false`, showing logged-in users the first-run registration screen. Now shows a "Couldn't reach the server" retry UI.
+  - **`_organize_books` per-book error handling** (`routers/organize.py`): each book wrapped in try/except so one failure (permission denied, disk full) doesn't strand the rest in `organize_status="copying"` forever. Failed books transition to `organize_status="failed"`.
+  - **Reimport rollback** (`services/reimport.py`): per-folder error path now calls `db.rollback()` before adding the skip-marker `ScannedFolder` — previously the half-written state tripped the `uq_scanned_folder_scan_path` unique constraint, blowing the entire reimport.
+  - **`audible_status` validation** (`routers/settings.py`): file existence alone was misleading; now attempts `Authenticator.from_file()` (no network) so a corrupt/truncated auth file reports `connected=False` immediately instead of failing every lookup minutes later.
+  - **Rate-limit dict pruning** (`main.py`, `routers/auth.py`): `_api_requests` and `_login_attempts` now prune empty entries — was unbounded growth in memory per unique source IP.
+  - **Admin gates** (`routers/auth.py`, `settings.py`, `scans.py`): new `require_admin` FastAPI dependency. Applied to `PUT /api/settings`, all Audible mutations (`/login-url`, `/authorize`, `/disconnect`), and `DELETE /api/scans/{id}`. Settings read endpoints and book-level mutations stay open to all logged-in users (shared-library model).
+  - 13 new tests: 4 for `_get_cached` (naive datetime handling, expired cleanup, round-trip), 9 for purge/delete (missing originals, missing destinations, force-purge, DELETE cascade behavior, files-on-disk untouched).
+
 ### Recent Changes (Session 2026-05-15)
 - **Loose audiobook file detection** (branch `claude/detect-books-outside-folders-KIXwl`):
   - Scanner now treats every `.m4b` file as its own book regardless of how many sit in the same directory (the format is almost always one-file-per-book). Other audio formats (mp3, flac, ...) keep the existing 'folder = book' grouping for multi-file chapter sets — `.mp3` chapter sets are unaffected.

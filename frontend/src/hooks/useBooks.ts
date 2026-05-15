@@ -70,6 +70,14 @@ export function useUnconfirmBatch() {
   });
 }
 
+export function useDeleteBook() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.deleteBook(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['books'] }),
+  });
+}
+
 export function useLookupBook() {
   return useMutation({
     mutationFn: (id: number) => api.lookupBook(id),

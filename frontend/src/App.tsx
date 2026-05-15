@@ -25,21 +25,24 @@ const queryClient = new QueryClient({
 
 function AuthGate() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  // Tracks /api/auth/status fetch failures separately from "no users
+  // yet" — previously a transient backend error fell through to
+  // `has_users: false` and showed a logged-in user the first-run
+  // registration screen.
+  const [authError, setAuthError] = useState<string | null>(null);
   const [view, setView] = useState<'login' | 'register'>('login');
   const [inviteToken, setInviteToken] = useState<string | undefined>();
 
   const checkAuth = () => {
+    setAuthError(null);
     getAuthStatus()
-      .then(setAuth)
-      .catch(() =>
-        setAuth({
-          logged_in: false,
-          username: null,
-          is_admin: false,
-          registration_open: true,
-          has_users: false,
-        }),
-      );
+      .then((status) => {
+        setAuth(status);
+        setAuthError(null);
+      })
+      .catch((err) => {
+        setAuthError(err instanceof Error ? err.message : 'Unable to reach server');
+      });
   };
 
   useEffect(() => {
@@ -52,6 +55,29 @@ function AuthGate() {
       setView('register');
     }
   }, []);
+
+  if (authError && auth === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6" style={{ background: 'var(--color-bg)' }}>
+        <div className="max-w-md w-full text-center space-y-4">
+          <h1 className="text-xl font-semibold" style={{ color: 'var(--color-text)' }}>
+            Couldn't reach the server
+          </h1>
+          <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
+            {authError}
+          </p>
+          <button
+            type="button"
+            className="px-4 py-2 rounded text-sm font-medium"
+            style={{ background: 'var(--color-primary)', color: 'white' }}
+            onClick={checkAuth}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (auth === null) {
     return null; // Loading

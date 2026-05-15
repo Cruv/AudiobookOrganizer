@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FolderOutput, Eye, FolderCheck } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
@@ -19,7 +19,50 @@ export default function OrganizePage() {
   const [previews, setPreviews] = useState<OrganizePreviewItem[]>([]);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isOrganizing, setIsOrganizing] = useState(false);
+  const [organizingIds, setOrganizingIds] = useState<number[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // Poll per-book organize status while a batch is in flight. Using a
+  // useEffect keyed on isOrganizing+ids avoids the stale-closure trap
+  // from the previous setInterval pattern: that captured `books` at
+  // handler-creation time, then the `pending` filter dropped in-flight
+  // books from the query, so the closure saw an empty remaining list
+  // on tick 1 and falsely declared completion.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!isOrganizing || organizingIds.length === 0) return;
+
+    const checkProgress = async () => {
+      try {
+        const statuses = await Promise.all(
+          organizingIds.map((id) => api.getOrganizeStatus(id).catch(() => null)),
+        );
+        const stillRunning = statuses.some(
+          (s) => s && s.organize_status === 'copying',
+        );
+        if (!stillRunning) {
+          setIsOrganizing(false);
+          setOrganizingIds([]);
+          setSelected(new Set());
+          setPreviews([]);
+          refetch();
+        }
+      } catch {
+        // ignore transient errors; next tick will retry
+      }
+    };
+
+    // Kick off immediately and then on interval so the UI clears as
+    // soon as the backend reports done.
+    checkProgress();
+    pollRef.current = setInterval(checkProgress, 2000);
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [isOrganizing, organizingIds, refetch]);
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => {
@@ -50,24 +93,12 @@ export default function OrganizePage() {
   const handleOrganize = async () => {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    setIsOrganizing(true);
     try {
       await api.executeOrganize(ids);
-      const poll = setInterval(async () => {
-        await refetch();
-        const remaining = books?.filter(
-          (b) => ids.includes(b.id) && b.organize_status === 'copying',
-        );
-        if (!remaining || remaining.length === 0) {
-          clearInterval(poll);
-          setIsOrganizing(false);
-          setSelected(new Set());
-          setPreviews([]);
-          refetch();
-        }
-      }, 2000);
+      setOrganizingIds(ids);
+      setIsOrganizing(true);
     } catch {
-      setIsOrganizing(false);
+      // executeOrganize threw; nothing in flight, leave UI as-is.
     }
   };
 

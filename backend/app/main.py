@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.12.0"
 
 app = FastAPI(
     title="Audiobook Organizer",
@@ -174,14 +174,31 @@ def _get_client_ip(request: Request) -> str:
 
 
 def _check_api_rate_limit(client_ip: str) -> bool:
-    """Return True if request should be allowed."""
+    """Return True if request should be allowed.
+
+    Prunes empty entries so the dict doesn't grow unboundedly with one
+    key per unique source IP for the lifetime of the process.
+    """
     now = time.monotonic()
     attempts = _api_requests.get(client_ip, [])
     attempts = [t for t in attempts if now - t < API_RATE_WINDOW]
-    _api_requests[client_ip] = attempts
     if len(attempts) >= API_RATE_LIMIT:
+        _api_requests[client_ip] = attempts
         return False
     attempts.append(now)
+    _api_requests[client_ip] = attempts
+
+    # Cheap periodic sweep of stale empty entries — every ~256 requests
+    # walk the dict and drop IPs with no recent activity. Bounded cost.
+    if len(_api_requests) > 32 and (int(now * 1000) & 0xFF) == 0:
+        cutoff = now - API_RATE_WINDOW
+        stale = [
+            ip for ip, ts in _api_requests.items()
+            if not ts or ts[-1] < cutoff
+        ]
+        for ip in stale:
+            _api_requests.pop(ip, None)
+
     return True
 
 

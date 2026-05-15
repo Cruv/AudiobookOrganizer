@@ -17,6 +17,13 @@ def verify_book(book: Book) -> PurgeVerifyItem:
     If the original path still exists, cross-check dest size against a
     fresh read of the original's on-disk size rather than trusting the
     stored BookFile.file_size (which can be stale or None).
+
+    A missing original is NOT a verification failure: the user may have
+    deleted the source themselves between organize and purge. In that
+    case there's nothing left to purge, but we still want the book to
+    be marked purged so it leaves the UI list. The destination is the
+    safety check — we refuse to "purge" a book whose copies vanished,
+    because that would silently lose data.
     """
     missing_files: list[str] = []
     total_size = 0
@@ -61,17 +68,29 @@ def verify_book(book: Book) -> PurgeVerifyItem:
     )
 
 
-def purge_book(book: Book, db: Session) -> PurgeResultItem:
-    """Delete original files for a book after verification passes."""
-    # Verify first
-    verification = verify_book(book)
-    if not verification.verified:
-        return PurgeResultItem(
-            book_id=book.id,
-            success=False,
-            files_deleted=0,
-            error=f"Verification failed: {'; '.join(verification.missing_files)}",
-        )
+def purge_book(book: Book, db: Session, force: bool = False) -> PurgeResultItem:
+    """Delete original files for a book after verification passes.
+
+    Per-file behaviour:
+    - Original exists -> delete it.
+    - Original missing -> skip silently. Not an error: the user may
+      have removed it externally. We still mark the file purged so the
+      book leaves the not-purged list.
+
+    The whole-book guard is verification: it has to pass before we
+    touch anything. If force=True, we skip the verification gate and
+    just mark whatever's still on disk as purged — used by the "Remove
+    from list" flow on the Purge page for stuck records.
+    """
+    if not force:
+        verification = verify_book(book)
+        if not verification.verified:
+            return PurgeResultItem(
+                book_id=book.id,
+                success=False,
+                files_deleted=0,
+                error=f"Verification failed: {'; '.join(verification.missing_files)}",
+            )
 
     files_deleted = 0
     for bf in book.files:

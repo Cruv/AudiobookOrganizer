@@ -83,6 +83,14 @@ def reimport_from_sidecars(
                     type(e).__name__,
                     exc_info=True,
                 )
+                # Roll back the half-written state from _reimport_one
+                # (flushed ScannedFolder/Book/BookFile rows) BEFORE we
+                # add the skip-marker. Without this, the failed run's
+                # ScannedFolder is still in the session and trips the
+                # unique constraint on (scan_id, folder_path) when we
+                # add the marker for the same folder — wiping the
+                # entire reimport.
+                db.rollback()
                 folder_path = os.path.dirname(sidecar_path)
                 sf = ScannedFolder(
                     scan_id=scan.id,
@@ -93,7 +101,15 @@ def reimport_from_sidecars(
                 )
                 db.add(sf)
                 scan.processed_folders += 1
-                db.commit()
+                try:
+                    db.commit()
+                except Exception:
+                    logger.warning(
+                        "Could not record skip marker for %s",
+                        sidecar_path,
+                        exc_info=True,
+                    )
+                    db.rollback()
 
         scan.status = "completed"
         scan.status_detail = None

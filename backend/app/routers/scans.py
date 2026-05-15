@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.scan import Scan
+from app.routers.auth import require_admin
 from app.schemas.scan import ScanCreate, ScanDetailResponse, ScanResponse
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
@@ -285,8 +286,13 @@ def get_scan(scan_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{scan_id}")
-def delete_scan(scan_id: int, db: Session = Depends(get_db)):
-    """Delete a scan and its scanned folders."""
+def delete_scan(
+    scan_id: int,
+    db: Session = Depends(get_db),
+    _admin = Depends(require_admin),
+):
+    """Delete a scan and its scanned folders. Admin only — destructive,
+    cascades to all books/files in the scan."""
     scan = db.query(Scan).filter(Scan.id == scan_id).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")

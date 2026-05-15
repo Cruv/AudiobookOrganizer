@@ -130,6 +130,9 @@ export const unconfirmBatch = (data: {
     body: JSON.stringify(data),
   });
 
+export const deleteBook = (id: number) =>
+  request<{ detail: string }>(`/books/${id}`, { method: 'DELETE' });
+
 export const lookupBook = (id: number) =>
   request<{ results: LookupResult[] }>(`/books/${id}/lookup`, { method: 'POST' });
 

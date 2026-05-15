@@ -17,6 +17,7 @@ import {
   Unlock,
   Pencil,
   FolderCheck,
+  Trash2,
 } from 'lucide-react';
 import {
   useBooks,
@@ -28,7 +29,9 @@ import {
   useLockBook,
   useUnlockBook,
   useMarkOrganizedBatch,
+  useDeleteBook,
 } from '@/hooks/useBooks';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import { exportBooks } from '@/api/client';
 import { ConfidenceBadge, SourceBadge, EditionBadge } from '@/components/ui/Badge';
 import BookEditModal from '@/components/BookEditModal';
@@ -144,11 +147,13 @@ export default function ReviewPage() {
   const lockBook = useLockBook();
   const unlockBook = useUnlockBook();
   const markOrganizedBatch = useMarkOrganizedBatch();
+  const deleteBook = useDeleteBook();
   const toast = useToast();
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [searchingBook, setSearchingBook] = useState<Book | null>(null);
   const [candidatesBook, setCandidatesBook] = useState<Book | null>(null);
+  const [removingBook, setRemovingBook] = useState<Book | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showBulkEdit, setShowBulkEdit] = useState(false);
 
@@ -507,6 +512,15 @@ export default function ReviewPage() {
                   aria-label={book.is_confirmed ? 'Unconfirm book' : 'Confirm book'}
                   style={{ color: book.is_confirmed ? 'var(--color-success)' : undefined }}
                 />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Trash2 size={15} />}
+                  onClick={() => setRemovingBook(book)}
+                  title="Remove from list (does not touch files on disk)"
+                  aria-label="Remove book from list"
+                  style={{ color: 'var(--color-text-muted)' }}
+                />
               </div>
             </div>
 
@@ -615,6 +629,32 @@ export default function ReviewPage() {
             setShowBulkEdit(false);
             clearSelection();
           }}
+        />
+      )}
+
+      {removingBook && (
+        <ConfirmDialog
+          title="Remove from list?"
+          message={`Remove "${removingBook.title || 'this book'}" from the database. Files on disk are NOT touched — both originals and any organized copies stay exactly where they are. Use this for stuck records, bad scan results, or entries whose files were cleaned up outside the app.`}
+          confirmLabel="Remove Entry"
+          confirmColor="var(--color-danger)"
+          onConfirm={() => {
+            const id = removingBook.id;
+            setRemovingBook(null);
+            deleteBook.mutate(id, {
+              onSuccess: () => {
+                toast.success('Book removed from list');
+                setSelectedIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(id);
+                  return next;
+                });
+              },
+              onError: (err) =>
+                toast.error(err instanceof Error ? err.message : 'Failed to remove book'),
+            });
+          }}
+          onCancel={() => setRemovingBook(null)}
         />
       )}
     </div>
