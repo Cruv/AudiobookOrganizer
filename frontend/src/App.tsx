@@ -19,6 +19,8 @@ const ReviewPage = lazy(() => import('@/pages/ReviewPage'));
 const OrganizePage = lazy(() => import('@/pages/OrganizePage'));
 const PurgePage = lazy(() => import('@/pages/PurgePage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
+const LibraryPage = lazy(() => import('@/pages/LibraryPage'));
+const DuplicatesPage = lazy(() => import('@/pages/DuplicatesPage'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -169,6 +171,26 @@ function AuthGate() {
               <ErrorBoundary>
                 <Suspense fallback={fallback}>
                   <PurgePage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/library"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <LibraryPage />
+                </Suspense>
+              </ErrorBoundary>
+            }
+          />
+          <Route
+            path="/duplicates"
+            element={
+              <ErrorBoundary>
+                <Suspense fallback={fallback}>
+                  <DuplicatesPage />
                 </Suspense>
               </ErrorBoundary>
             }

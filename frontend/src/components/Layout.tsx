@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
+  BarChart3,
   BookOpen,
   CheckCircle,
+  Copy,
   FolderSearch,
   LogOut,
   Menu,
@@ -124,8 +126,43 @@ export default function Layout({ username, isAdmin }: Props) {
           );
         })}
 
-        {/* Separator + Settings */}
+        {/* Separator + extras */}
         <div className="mx-4 my-3 border-t" style={{ borderColor: 'var(--color-border)' }} />
+
+        <NavLink
+          to="/library"
+          className={({ isActive }) =>
+            `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+              isActive ? 'font-semibold' : 'hover:bg-[var(--color-surface-hover)]'
+            }`
+          }
+          style={({ isActive }) =>
+            isActive
+              ? { backgroundColor: 'var(--color-primary)', color: 'white' }
+              : { color: 'var(--color-text-muted)' }
+          }
+        >
+          <BarChart3 size={16} />
+          Library
+        </NavLink>
+
+        <NavLink
+          to="/duplicates"
+          className={({ isActive }) =>
+            `flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+              isActive ? 'font-semibold' : 'hover:bg-[var(--color-surface-hover)]'
+            }`
+          }
+          style={({ isActive }) =>
+            isActive
+              ? { backgroundColor: 'var(--color-primary)', color: 'white' }
+              : { color: 'var(--color-text-muted)' }
+          }
+        >
+          <Copy size={16} />
+          Duplicates
+        </NavLink>
+
         <NavLink
           to="/settings"
           className={({ isActive }) =>

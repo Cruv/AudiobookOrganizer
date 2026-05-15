@@ -187,3 +187,47 @@ export interface InviteItem {
   expires_at: string;
   used: boolean;
 }
+
+export interface CountedItem {
+  name: string;
+  count: number;
+}
+
+export interface StatsResponse {
+  totals: {
+    books: number;
+    confirmed: number;
+    organized: number;
+    purged: number;
+    locked: number;
+  };
+  sources: CountedItem[];
+  editions: CountedItem[];
+  top_authors: CountedItem[];
+  top_series: CountedItem[];
+  by_decade: CountedItem[];
+}
+
+export interface DuplicateBook {
+  id: number;
+  title: string | null;
+  author: string | null;
+  edition: string | null;
+  confidence: number;
+  is_confirmed: boolean;
+  folder_path: string | null;
+  cover_url: string | null;
+  organize_status: string;
+}
+
+export interface DuplicateGroup {
+  key: string;
+  title: string | null;
+  author: string | null;
+  edition: string | null;
+  books: DuplicateBook[];
+}
+
+export interface DuplicatesResponse {
+  groups: DuplicateGroup[];
+}

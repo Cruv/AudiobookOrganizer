@@ -3,6 +3,7 @@ import type {
   Book,
   BookDetail,
   BrowseResult,
+  DuplicatesResponse,
   InviteItem,
   LookupCandidate,
   LookupResult,
@@ -14,6 +15,7 @@ import type {
   Scan,
   ScanDetail,
   Settings,
+  StatsResponse,
 } from '@/types';
 
 const BASE = '/api';
@@ -323,3 +325,14 @@ export const getInvites = () => request<InviteItem[]>('/auth/invites');
 
 export const deleteInvite = (id: number) =>
   request<{ detail: string }>(`/auth/invites/${id}`, { method: 'DELETE' });
+
+// Stats + duplicates
+export const getStats = () => request<StatsResponse>('/stats');
+
+export const getDuplicates = () => request<DuplicatesResponse>('/stats/duplicates');
+
+export const resolveDuplicates = (keep_id: number, delete_ids: number[]) =>
+  request<{ deleted: number }>('/stats/duplicates/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ keep_id, delete_ids }),
+  });

@@ -21,7 +21,7 @@ from app.config import settings  # noqa: E402
 from app.database import SessionLocal, engine  # noqa: E402
 from app.models import Base  # noqa: E402
 from app.models.user import User, UserSession  # noqa: E402
-from app.routers import auth, books, organize, scans  # noqa: E402
+from app.routers import auth, books, organize, scans, stats  # noqa: E402
 from app.routers import settings as settings_router  # noqa: E402
 
 
@@ -150,7 +150,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Shutdown httpx cleanup failed", exc_info=True)
 
 
-APP_VERSION = "1.16.0"
+APP_VERSION = "1.17.0"
 
 app = FastAPI(
     title="Audiobook Organizer",
@@ -305,6 +305,7 @@ app.include_router(books.router)
 app.include_router(organize.router)
 app.include_router(organize.purge_router)
 app.include_router(settings_router.router)
+app.include_router(stats.router)
 
 
 @app.get("/api/health")

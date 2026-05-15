@@ -56,6 +56,12 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 7, v1.17.0 — PR 6 of multi-PR audit pass)
+- **Library stats dashboard** (`routers/stats.py`, `pages/LibraryPage.tsx`): new `GET /api/stats` returns totals (books/confirmed/organized/purged/locked), counts by source/edition/decade, and top-25 authors + top-25 series. New `/library` page renders tiles + horizontal bar charts. All queries are pure `GROUP BY` + `COUNT` using the PR-2 indexes — stays fast at 10k+ books.
+- **Duplicates UI** (`routers/stats.py:get_duplicates`, `pages/DuplicatesPage.tsx`): new `GET /api/stats/duplicates` returns groups of books with identical normalized title + author + edition. Different editions (GA vs Standard) are intentionally NOT flagged. `POST /api/stats/duplicates/resolve` removes the un-picked books (Book + ScannedFolder rows, never files on disk). New `/duplicates` page lets the user pick one to keep per group and remove the rest in one click. Suppresses the previous "logs warnings nobody sees" failure mode.
+- **Sidebar nav**: added Library + Duplicates links under the workflow separator.
+- 12 new tests covering empty-library stats, aggregate totals, top-N sort order, decade bucketing, edition labeling, duplicate grouping (case-insensitive title+author), different-edition non-grouping, group size ordering, and resolve happy/edge paths.
+
 ### Recent Changes (Session 2026-05-15 part 6, v1.16.0 — PR 5 of multi-PR audit pass)
 - **Bulk re-lookup** (`POST /api/books/relookup-batch`): runs `refresh_candidates` for N books with bounded concurrency (re-using `AUTO_LOOKUP_CONCURRENCY=5`). Surfaced in the ReviewPage bulk action bar as "Re-lookup" — typical use case is connecting Audible after an initial scan, so all books get re-evaluated against the better provider without a full re-scan.
 - **Undo organize** (`POST /api/organize/undo`): deletes the destination files, sidecar, and cover.jpg; tries to remove the (now empty) output dir; resets the book back to `organize_status="pending"` and `BookFile.copy_status="pending"`. Refuses to undo any book whose source files have gone missing (we never delete the only remaining copy of the audio). Refuses purged books outright. Surfaced via an "Undo" button on the new "Recently organized" tab.
