@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { CheckCircle, FolderOpen, FolderSearch, Trash2, XCircle, Loader2, Download } from 'lucide-react';
-import { useScans, useScan, useCreateScan, useDeleteScan, useReimportLibrary } from '@/hooks/useScans';
+import {
+  useScans, useScan, useScanEvents,
+  useCreateScan, useDeleteScan, useReimportLibrary,
+} from '@/hooks/useScans';
 import DirectoryBrowser from '@/components/DirectoryBrowser';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
@@ -16,7 +19,13 @@ export default function ScanPage() {
   const toast = useToast();
 
   const { data: scans } = useScans();
-  const { data: activeScan } = useScan(activeScanId);
+  // SSE-pushed updates while the scan is running. Falls back to the
+  // existing polling hook if the connection drops, so we still get
+  // the final status even if EventSource fails mid-stream.
+  const { data: sseSnapshot } = useScanEvents(activeScanId);
+  const { data: polledScan } = useScan(activeScanId);
+  // Prefer the SSE snapshot when it has the up-to-date status.
+  const activeScan = sseSnapshot ?? polledScan;
   const createScan = useCreateScan();
   const reimportLibrary = useReimportLibrary();
   const deleteScan = useDeleteScan();
@@ -56,9 +65,39 @@ export default function ScanPage() {
     return detail;
   };
 
+  const isFirstRun = !scans || scans.length === 0;
+
   return (
     <div className="max-w-4xl">
       <h1 className="text-2xl font-bold mb-6">Scan Directory</h1>
+
+      {/* First-run onboarding hint */}
+      {isFirstRun && !activeScan && (
+        <Card
+          className="mb-6"
+          borderColor="var(--color-primary)"
+        >
+          <h3 className="text-sm font-semibold mb-2">Welcome — let's get started</h3>
+          <ol
+            className="text-xs space-y-1.5 list-decimal list-inside"
+            style={{ color: 'var(--color-text-muted)' }}
+          >
+            <li>
+              <strong style={{ color: 'var(--color-text)' }}>Set the output root</strong> on the{' '}
+              <span style={{ color: 'var(--color-primary)' }}>Settings</span> page (where
+              organized books will land).
+            </li>
+            <li>
+              <strong style={{ color: 'var(--color-text)' }}>Optional but recommended:</strong>{' '}
+              connect Audible on the Settings page for the best metadata + cover art.
+            </li>
+            <li>
+              <strong style={{ color: 'var(--color-text)' }}>Pick a source directory below</strong>{' '}
+              (Browse) and start a scan. You'll review matches on the Review page next.
+            </li>
+          </ol>
+        </Card>
+      )}
 
       {/* Scan input */}
       <Card className="mb-6">

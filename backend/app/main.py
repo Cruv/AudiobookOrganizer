@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.database import SessionLocal, engine  # noqa: E402
 from app.models import Base  # noqa: E402
-from app.models.user import User, UserSession  # noqa: E402
+from app.models.user import ApiToken, User, UserSession  # noqa: E402
 from app.routers import auth, books, organize, scans, stats  # noqa: E402
 from app.routers import settings as settings_router  # noqa: E402
 
@@ -42,6 +42,9 @@ def _run_migrations(engine_instance):
         ("books", "match_confidence", "FLOAT DEFAULT 0.0"),
         ("books", "locked", "BOOLEAN NOT NULL DEFAULT 0"),
         ("scans", "status_detail", "TEXT"),
+        # PR 7 additions.
+        ("book_files", "integrity_status", "VARCHAR(20) NOT NULL DEFAULT 'unchecked'"),
+        ("book_files", "integrity_detail", "TEXT"),
     ]
 
     indexes = [
@@ -150,7 +153,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Shutdown httpx cleanup failed", exc_info=True)
 
 
-APP_VERSION = "1.17.0"
+APP_VERSION = "1.18.0"
 
 app = FastAPI(
     title="Audiobook Organizer",
@@ -275,22 +278,58 @@ async def auth_middleware(request: Request, call_next):
                 if _has_users_cache is None:
                     _has_users_cache = db.query(User).first() is not None
                 if _has_users_cache:
-                    token = request.cookies.get("session_token")
-                    if not token:
-                        return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-                    session = (
-                        db.query(UserSession)
-                        .filter(
-                            UserSession.token == token,
-                            UserSession.expires_at > datetime.now(timezone.utc),
+                    # Try API token first (Authorization: Bearer ...). Falls
+                    # back to session cookie if no header or the token is
+                    # invalid. Lets third-party automation tools call the
+                    # API without needing browser cookies.
+                    user_id: int | None = None
+
+                    auth_header = request.headers.get("authorization") or ""
+                    if auth_header.lower().startswith("bearer "):
+                        plaintext = auth_header[7:].strip()
+                        if plaintext:
+                            token_hash = ApiToken.hash_token(plaintext)
+                            api_token = (
+                                db.query(ApiToken)
+                                .filter(
+                                    ApiToken.token_hash == token_hash,
+                                    ApiToken.revoked.is_(False),
+                                )
+                                .first()
+                            )
+                            if api_token:
+                                user_id = api_token.user_id
+                                # Touch last_used_at — best effort, don't
+                                # fail the request if the write fails.
+                                try:
+                                    api_token.last_used_at = datetime.now(timezone.utc)
+                                    db.commit()
+                                except Exception:
+                                    db.rollback()
+
+                    if user_id is None:
+                        token = request.cookies.get("session_token")
+                        if not token:
+                            return JSONResponse(
+                                status_code=401,
+                                content={"detail": "Not authenticated"},
+                            )
+                        session = (
+                            db.query(UserSession)
+                            .filter(
+                                UserSession.token == token,
+                                UserSession.expires_at > datetime.now(timezone.utc),
+                            )
+                            .first()
                         )
-                        .first()
-                    )
-                    if not session:
-                        return JSONResponse(status_code=401, content={"detail": "Session expired"})
-                    # Attach user info to request state for downstream handlers
-                    request.state.user_id = session.user_id
-                    request.state.session_token = session.token
+                        if not session:
+                            return JSONResponse(
+                                status_code=401, content={"detail": "Session expired"},
+                            )
+                        user_id = session.user_id
+                        request.state.session_token = session.token
+
+                    request.state.user_id = user_id
             finally:
                 db.close()
 

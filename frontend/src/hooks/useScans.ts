@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '@/api/client';
+import type { ScanDetail } from '@/types';
 
 export function useScans() {
   return useQuery({
@@ -64,4 +65,77 @@ export function useDeleteScan() {
     mutationFn: api.deleteScan,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['scans'] }),
   });
+}
+
+/**
+ * Subscribe to a scan's server-sent events stream. Drops the noisy
+ * 1.5s poll for the running case — we get a server-initiated update
+ * whenever the scan's status / processed_folders / status_detail
+ * actually changes.
+ *
+ * If the browser doesn't support EventSource (rare), or the request
+ * 404s mid-stream, falls back to polling via `useScan`. Returns the
+ * scan snapshot the same way useScan would so it's a drop-in.
+ */
+export function useScanEvents(id: number | null): {
+  data: ScanDetail | undefined;
+} {
+  const qc = useQueryClient();
+  const [snapshot, setSnapshot] = useState<ScanDetail | undefined>(undefined);
+
+  useEffect(() => {
+    if (id == null) {
+      setSnapshot(undefined);
+      return;
+    }
+
+    // Seed from the cache so we don't flicker on mount.
+    const cached = qc.getQueryData<ScanDetail>(['scans', id]);
+    if (cached) setSnapshot(cached);
+
+    let cancelled = false;
+    const source = new EventSource(`/api/scans/${id}/events`);
+
+    const handleSnapshot = (raw: string) => {
+      try {
+        const data = JSON.parse(raw);
+        if (cancelled) return;
+        setSnapshot((prev) => {
+          // The stream emits the small status snapshot. Merge with
+          // whatever ScanDetail fields we already had cached so the
+          // folder list etc. stays intact.
+          const merged = { ...(prev || {}), ...data } as ScanDetail;
+          qc.setQueryData(['scans', id], merged);
+          return merged;
+        });
+      } catch {
+        // ignore malformed event
+      }
+    };
+
+    source.addEventListener('update', (e) => {
+      handleSnapshot((e as MessageEvent).data);
+    });
+    source.addEventListener('complete', (e) => {
+      handleSnapshot((e as MessageEvent).data);
+      source.close();
+      qc.invalidateQueries({ queryKey: ['scans'] });
+      qc.invalidateQueries({ queryKey: ['books'] });
+    });
+    source.addEventListener('error', () => {
+      // EventSource has its own auto-reconnect for transient failures;
+      // close on hard error and let useScan's poll take over.
+      source.close();
+    });
+    source.addEventListener('timeout', () => {
+      source.close();
+    });
+
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [id, qc]);
+
+  return { data: snapshot };
 }

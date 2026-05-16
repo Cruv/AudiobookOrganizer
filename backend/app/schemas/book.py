@@ -18,6 +18,8 @@ class BookFileResponse(BaseModel):
     tag_year: str | None
     tag_track: str | None
     tag_narrator: str | None
+    integrity_status: str = "unchecked"
+    integrity_detail: str | None = None
 
     model_config = {"from_attributes": True}
 

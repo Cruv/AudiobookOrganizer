@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Save, RotateCcw, Link, Unlink, ExternalLink, Copy, Trash2, UserPlus } from 'lucide-react';
+import {
+  Save, RotateCcw, Link, Unlink, ExternalLink, Copy, Trash2, UserPlus, Key, Plus,
+} from 'lucide-react';
 import { useSettings, useUpdateSettings, usePreviewPattern } from '@/hooks/useSettings';
 import {
   getAudibleStatus,
@@ -9,6 +11,10 @@ import {
   createInvite,
   getInvites,
   deleteInvite,
+  listApiTokens,
+  createApiToken,
+  revokeApiToken,
+  type ApiTokenItem,
 } from '@/api/client';
 import { useToast } from '@/components/Toast';
 import { Button, Card, Input, Select, Toggle, StatusBadge } from '@/components/ui';
@@ -63,6 +69,13 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
   const [invites, setInvites] = useState<InviteItem[]>([]);
   const [registrationOpen, setRegistrationOpen] = useState(true);
 
+  // API tokens state
+  const [tokens, setTokens] = useState<ApiTokenItem[]>([]);
+  const [newTokenName, setNewTokenName] = useState('');
+  // The full plaintext is only available right after creation; we keep
+  // it in component state until the user dismisses it.
+  const [revealedToken, setRevealedToken] = useState<string | null>(null);
+
   const { data: preview } = usePreviewPattern(pattern);
 
   useEffect(() => {
@@ -87,6 +100,12 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
     if (!isAdmin) return;
     getInvites().then(setInvites).catch(() => {});
   }, [isAdmin]);
+
+  useEffect(() => {
+    // Tokens are per-user, not admin-gated — every logged-in user
+    // sees their own.
+    listApiTokens().then(setTokens).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -180,6 +199,42 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
       toast.success('Invite revoked');
     } catch {
       toast.error('Failed to revoke invite');
+    }
+  };
+
+  const handleCreateApiToken = async () => {
+    const name = newTokenName.trim();
+    if (!name) {
+      toast.error('Give the token a name first');
+      return;
+    }
+    try {
+      const created = await createApiToken(name);
+      setTokens((prev) => [
+        {
+          id: created.id, name: created.name,
+          token_prefix: created.token_prefix,
+          created_at: new Date().toISOString(),
+          last_used_at: null, revoked: false,
+        },
+        ...prev,
+      ]);
+      setRevealedToken(created.token);
+      setNewTokenName('');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to create token');
+    }
+  };
+
+  const handleRevokeApiToken = async (id: number) => {
+    try {
+      await revokeApiToken(id);
+      setTokens((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, revoked: true } : t)),
+      );
+      toast.success('Token revoked');
+    } catch {
+      toast.error('Failed to revoke token');
     }
   };
 
@@ -473,6 +528,120 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
             )}
           </Card>
         )}
+
+        {/* API Tokens (per-user, all logged-in users see their own) */}
+        <Card header={<h2 className="text-sm font-semibold">API Tokens</h2>}>
+          <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
+            Long-lived tokens for third-party automation (Sonarr/Radarr-style
+            downloaders, custom webhooks). Send as <code>Authorization: Bearer
+            &lt;token&gt;</code>. Each token is shown only once when created
+            — copy it then.
+          </p>
+
+          {revealedToken && (
+            <div
+              className="rounded p-3 mb-3 border"
+              style={{
+                borderColor: 'var(--color-warning)',
+                backgroundColor: 'rgba(245,158,11,0.08)',
+              }}
+            >
+              <p className="text-xs font-medium mb-2" style={{ color: 'var(--color-warning)' }}>
+                Copy this token now — it won't be shown again.
+              </p>
+              <div className="flex items-center gap-2">
+                <code
+                  className="flex-1 text-xs font-mono break-all p-2 rounded"
+                  style={{ backgroundColor: 'var(--color-bg)' }}
+                >
+                  {revealedToken}
+                </code>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<Copy size={12} />}
+                  onClick={() => {
+                    navigator.clipboard.writeText(revealedToken);
+                    toast.success('Token copied');
+                  }}
+                  title="Copy token"
+                >
+                  Copy
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setRevealedToken(null)}
+                  title="Dismiss"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2 mb-4">
+            <Input
+              type="text"
+              value={newTokenName}
+              onChange={(e) => setNewTokenName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateApiToken()}
+              placeholder="Token name (e.g. sonarr)"
+              className="flex-1"
+            />
+            <Button icon={<Plus size={14} />} onClick={handleCreateApiToken}>
+              Create
+            </Button>
+          </div>
+
+          {tokens.length > 0 ? (
+            <div className="space-y-2">
+              {tokens.map((t) => (
+                <div
+                  key={t.id}
+                  className="flex items-center justify-between rounded p-2.5 text-xs"
+                  style={{
+                    backgroundColor: 'var(--color-bg)',
+                    opacity: t.revoked ? 0.5 : 1,
+                  }}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Key size={12} style={{ color: 'var(--color-text-muted)' }} />
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{t.name}</p>
+                      <p
+                        className="font-mono truncate"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        {t.token_prefix}…
+                        {t.revoked && (
+                          <span className="ml-2" style={{ color: 'var(--color-danger)' }}>
+                            (revoked)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  {!t.revoked && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Trash2 size={12} />}
+                      onClick={() => handleRevokeApiToken(t.id)}
+                      title="Revoke token"
+                      aria-label={`Revoke ${t.name}`}
+                      style={{ color: 'var(--color-danger)' }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+              No tokens yet. Create one to wire the app into a downloader.
+            </p>
+          )}
+        </Card>
 
         {/* Save */}
         <Button

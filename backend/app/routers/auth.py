@@ -3,11 +3,19 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.settings import UserSetting
-from app.models.user import Invite, User, UserSession, hash_password, verify_password
+from app.models.user import (
+    ApiToken,
+    Invite,
+    User,
+    UserSession,
+    hash_password,
+    verify_password,
+)
 from app.schemas.auth import AuthStatus, InviteResponse, LoginRequest, RegisterRequest
 
 logger = logging.getLogger(__name__)
@@ -343,3 +351,118 @@ def delete_invite(
     db.delete(invite)
     db.commit()
     return {"detail": "Invite revoked"}
+
+
+# --- API tokens (per-user, long-lived) ---
+
+
+class ApiTokenItem(BaseModel):
+    id: int
+    name: str
+    token_prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked: bool
+
+
+class ApiTokenCreatedResponse(BaseModel):
+    id: int
+    name: str
+    token_prefix: str
+    token: str  # plaintext — shown ONCE on creation
+
+
+class CreateApiTokenRequest(BaseModel):
+    name: str
+
+
+@router.post("/tokens", response_model=ApiTokenCreatedResponse)
+def create_api_token(
+    body: CreateApiTokenRequest,
+    db: Session = Depends(get_db),
+    session_token: str | None = Cookie(None),
+):
+    """Create a new API token for the current user.
+
+    Returns the plaintext token in the response — this is the ONLY
+    time it's exposed. After this, the DB stores a SHA-256 hash plus
+    the first 8 chars for display.
+    """
+    user = _get_current_user(db, session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Token name required")
+    if len(name) > 100:
+        raise HTTPException(status_code=400, detail="Token name too long")
+
+    plaintext = ApiToken.create_plaintext()
+    token = ApiToken(
+        user_id=user.id,
+        name=name,
+        token_hash=ApiToken.hash_token(plaintext),
+        # First 8 chars after the "ao_" prefix — enough to disambiguate
+        # in the UI without being useful to an attacker.
+        token_prefix=plaintext[:11],
+    )
+    db.add(token)
+    db.commit()
+    db.refresh(token)
+
+    logger.info("API token created for %s: %s (prefix=%s)", user.username, name, token.token_prefix)
+    return ApiTokenCreatedResponse(
+        id=token.id,
+        name=token.name,
+        token_prefix=token.token_prefix,
+        token=plaintext,
+    )
+
+
+@router.get("/tokens", response_model=list[ApiTokenItem])
+def list_api_tokens(
+    db: Session = Depends(get_db),
+    session_token: str | None = Cookie(None),
+):
+    user = _get_current_user(db, session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    rows = (
+        db.query(ApiToken)
+        .filter(ApiToken.user_id == user.id)
+        .order_by(ApiToken.created_at.desc())
+        .all()
+    )
+    return [
+        ApiTokenItem(
+            id=t.id, name=t.name, token_prefix=t.token_prefix,
+            created_at=t.created_at, last_used_at=t.last_used_at,
+            revoked=t.revoked,
+        )
+        for t in rows
+    ]
+
+
+@router.delete("/tokens/{token_id}")
+def revoke_api_token(
+    token_id: int,
+    db: Session = Depends(get_db),
+    session_token: str | None = Cookie(None),
+):
+    user = _get_current_user(db, session_token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    token = (
+        db.query(ApiToken)
+        .filter(ApiToken.id == token_id, ApiToken.user_id == user.id)
+        .first()
+    )
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+    token.revoked = True
+    db.commit()
+    return {"detail": "Token revoked"}

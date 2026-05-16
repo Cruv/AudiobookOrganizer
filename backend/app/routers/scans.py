@@ -1,9 +1,12 @@
+import asyncio
+import json
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models.scan import Scan
 from app.routers.auth import require_admin
 from app.schemas.scan import ScanCreate, ScanDetailResponse, ScanResponse
@@ -283,6 +286,86 @@ def get_scan(scan_id: int, db: Session = Depends(get_db)):
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
     return scan
+
+
+@router.get("/{scan_id}/events")
+async def scan_events(scan_id: int):
+    """Server-sent events stream of a scan's status.
+
+    Pushes one event per status change (status, processed_folders,
+    status_detail) and one final `complete` event when the scan
+    transitions out of `running`. Replaces the every-1.5s polling
+    that the previous frontend used — the connection is one HTTP
+    request, idle most of the time.
+
+    We snapshot the scan via its own short-lived SessionLocal each
+    tick so the request session doesn't hold a connection for the
+    duration. Returns 404 if the scan doesn't exist on first read.
+    """
+
+    async def _event_stream():
+        last_signature: str | None = None
+        last_seen_running = True
+        # Cap total stream lifetime to one hour so a runaway scan
+        # doesn't leak the connection forever.
+        max_seconds = 3600
+        elapsed = 0
+        poll_interval = 1.5
+
+        while elapsed < max_seconds:
+            snapshot = await asyncio.to_thread(_read_scan_snapshot, scan_id)
+            if snapshot is None:
+                # Scan doesn't exist (yet, or anymore). Signal end.
+                yield "event: error\ndata: " + json.dumps({"detail": "not found"}) + "\n\n"
+                return
+
+            signature = json.dumps(snapshot, sort_keys=True)
+            if signature != last_signature:
+                yield "event: update\ndata: " + signature + "\n\n"
+                last_signature = signature
+
+            if snapshot["status"] != "running":
+                # One last event so the client can clean up promptly.
+                yield "event: complete\ndata: " + signature + "\n\n"
+                return
+
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+            last_seen_running = True
+
+        # Loop terminated due to timeout — let the client know.
+        _ = last_seen_running
+        yield "event: timeout\ndata: {}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # tell nginx not to buffer
+            "Connection": "keep-alive",
+        },
+    )
+
+
+def _read_scan_snapshot(scan_id: int) -> dict | None:
+    """Read a small JSON-able snapshot of the scan with a fresh
+    SessionLocal. Returns None if the scan is gone."""
+    db = SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if scan is None:
+            return None
+        return {
+            "id": scan.id,
+            "status": scan.status,
+            "total_folders": scan.total_folders,
+            "processed_folders": scan.processed_folders,
+            "status_detail": scan.status_detail,
+            "error_message": scan.error_message,
+        }
+    finally:
+        db.close()
 
 
 @router.delete("/{scan_id}")

@@ -536,6 +536,42 @@ def unconfirm_book(book_id: int, db: Session = Depends(get_db)):
     return resp
 
 
+class IntegrityCheckResponse(BaseModel):
+    book_id: int
+    ok: int
+    short: int
+    unreadable: int
+    unchecked: int
+
+
+@router.post("/{book_id}/integrity-check", response_model=IntegrityCheckResponse)
+def integrity_check_book(book_id: int, db: Session = Depends(get_db)):
+    """Run the integrity check on each BookFile and persist the
+    `integrity_status` per row. Returns a tally so the UI can warn
+    when files look truncated.
+    """
+    from app.services.integrity import check_file
+
+    book = (
+        db.query(Book)
+        .options(joinedload(Book.files))
+        .filter(Book.id == book_id)
+        .first()
+    )
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    tally = {"ok": 0, "short": 0, "unreadable": 0, "unchecked": 0}
+    for bf in book.files:
+        status, detail = check_file(bf.original_path)
+        bf.integrity_status = status
+        bf.integrity_detail = detail
+        tally[status] = tally.get(status, 0) + 1
+    db.commit()
+
+    return IntegrityCheckResponse(book_id=book_id, **tally)
+
+
 @router.delete("/{book_id}")
 def delete_book(book_id: int, db: Session = Depends(get_db)):
     """Remove a book entry from the database.

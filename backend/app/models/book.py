@@ -89,6 +89,15 @@ class BookFile(Base):
     tag_track: Mapped[str | None] = mapped_column(String(10), nullable=True)
     tag_narrator: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Integrity-check fields. `integrity_status`: 'unchecked', 'ok',
+    # 'unreadable' (mutagen couldn't parse the header at all), or
+    # 'short' (file duration is way smaller than the tag-declared
+    # duration — likely a truncated download).
+    integrity_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="unchecked"
+    )
+    integrity_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     book: Mapped["Book"] = relationship(back_populates="files")
 
 

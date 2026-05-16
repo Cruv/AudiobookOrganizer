@@ -63,6 +63,41 @@ class UserSession(Base):
         return datetime.now(timezone.utc) + timedelta(days=7)
 
 
+class ApiToken(Base):
+    """Long-lived bearer token for third-party automation.
+
+    Lets users wire the app into a downloader (Sonarr/Radarr-style) or
+    a webhook without sharing their session cookie. Stored as a hash
+    of the token so a DB read alone doesn't yield the secret. The
+    plaintext is only available at creation time.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # First 8 chars of the plaintext, kept so the UI can show the user
+    # which token is which without revealing the full secret.
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    @staticmethod
+    def create_plaintext() -> str:
+        """Generate a new token. Caller stores the *hash*, not this value."""
+        return "ao_" + secrets.token_urlsafe(40)
+
+    @staticmethod
+    def hash_token(plaintext: str) -> str:
+        """SHA-256 hex digest of the plaintext."""
+        return hashlib.sha256(plaintext.encode()).hexdigest()
+
+
 class Invite(Base):
     __tablename__ = "invites"
 

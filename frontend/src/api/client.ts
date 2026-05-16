@@ -326,6 +326,24 @@ export const getInvites = () => request<InviteItem[]>('/auth/invites');
 export const deleteInvite = (id: number) =>
   request<{ detail: string }>(`/auth/invites/${id}`, { method: 'DELETE' });
 
+// API tokens (per-user, long-lived)
+export interface ApiTokenItem {
+  id: number;
+  name: string;
+  token_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked: boolean;
+}
+export const listApiTokens = () => request<ApiTokenItem[]>('/auth/tokens');
+export const createApiToken = (name: string) =>
+  request<ApiTokenItem & { token: string }>('/auth/tokens', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+export const revokeApiToken = (id: number) =>
+  request<{ detail: string }>(`/auth/tokens/${id}`, { method: 'DELETE' });
+
 // Stats + duplicates
 export const getStats = () => request<StatsResponse>('/stats');
 
