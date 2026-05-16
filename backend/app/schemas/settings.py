@@ -6,6 +6,7 @@ class SettingsResponse(BaseModel):
     output_root: str
     google_books_api_key: str | None
     audible_locale: str | None = None
+    write_tags_on_organize: bool = False
 
 
 class SettingsUpdate(BaseModel):
@@ -13,6 +14,8 @@ class SettingsUpdate(BaseModel):
     output_root: str | None = None
     google_books_api_key: str | None = None
     audible_locale: str | None = None
+    write_tags_on_organize: bool | None = None
+    registration_open: str | None = None
 
 
 class PatternPreview(BaseModel):

@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Shutdown httpx cleanup failed", exc_info=True)
 
 
-APP_VERSION = "1.18.0"
+APP_VERSION = "1.19.0"
 
 app = FastAPI(
     title="Audiobook Organizer",

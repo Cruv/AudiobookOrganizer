@@ -56,6 +56,13 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 9, v1.19.0 — PR 8 of multi-PR audit pass — FINAL)
+- **Tag write-back (opt-in)** (`services/tagwriter.py`): new module that patches title/author/album/year/narrator/series tags on a destination file via mutagen. Supports MP3 (EasyID3), MP4/M4B (iTunes-style atoms), FLAC/OggVorbis (Vorbis comments). Source files are NEVER touched — we always write to the COPY only, so the user has a rollback point.
+- **Setting**: `write_tags_on_organize` (boolean, default false). New `Output options` card on SettingsPage with a Toggle. Off by default because tag writes are irreversible without re-organizing.
+- **Integration**: `organize_book` calls `_write_tags_to_destinations(book)` after the audio commits and cover.jpg downloads, but only when the setting is true. Failures are logged, not fatal.
+- **Settings round-trip**: `update_settings` now coerces booleans to canonical "true"/"false" strings before storage (the settings table is TEXT). `get_settings` parses them back. Schema gained `write_tags_on_organize: bool` field.
+- 6 new tests covering write_book_tags entry-point validation (missing file, unsupported extension), `_tag_write_enabled` default/true/other behavior, and settings boolean round-trip.
+
 ### Recent Changes (Session 2026-05-15 part 8, v1.18.0 — PR 7 of multi-PR audit pass)
 - **SSE scan progress** (`routers/scans.py:scan_events`, `hooks/useScans.ts:useScanEvents`): new `GET /api/scans/{id}/events` streams server-sent events with the scan status snapshot — one event per change, plus a final `complete` event. Replaces the per-1.5s poll on ScanPage while the scan is running. The hook seeds from the TanStack cache to avoid flicker on mount and falls back to the existing `useScan` poll if the EventSource drops.
 - **API tokens** (`models/user.py:ApiToken`, `routers/auth.py:/tokens`, `main.py` middleware): long-lived per-user bearer tokens for third-party automation. Token plaintext is generated as `ao_<urlsafe>` and stored only as SHA-256 hash (+ first 11 chars for the UI). New `POST /api/auth/tokens` returns the plaintext exactly once. Auth middleware now accepts `Authorization: Bearer <token>` as an alternative to the session cookie. UI lives in Settings.

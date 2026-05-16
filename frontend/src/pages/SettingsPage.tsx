@@ -56,6 +56,7 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
   const [pattern, setPattern] = useState('');
   const [root, setRoot] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [writeTagsOnOrganize, setWriteTagsOnOrganize] = useState(false);
 
   // Audible state
   const [audibleConnected, setAudibleConnected] = useState(false);
@@ -84,6 +85,7 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
       setRoot(settings.output_root);
       setApiKey(settings.google_books_api_key || '');
       if (settings.audible_locale) setAudibleLocale(settings.audible_locale);
+      setWriteTagsOnOrganize(!!settings.write_tags_on_organize);
     }
   }, [settings]);
 
@@ -126,6 +128,7 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
         output_root: root,
         google_books_api_key: apiKey || null,
         audible_locale: audibleLocale,
+        write_tags_on_organize: writeTagsOnOrganize,
       },
       {
         onSuccess: () => toast.success('Settings saved'),
@@ -338,6 +341,18 @@ export default function SettingsPage({ isAdmin }: SettingsPageProps) {
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="Enter API key..."
           />
+        </Card>
+
+        {/* Tag write-back (opt-in, destructive) */}
+        <Card header={<h2 className="text-sm font-semibold">Output options</h2>}>
+          <div className="rounded p-3" style={{ backgroundColor: 'var(--color-bg)' }}>
+            <Toggle
+              label="Write corrected tags into organized files"
+              description="When ON, organize patches title/author/album/year/narrator/series tags on the copied destination files via mutagen. Source files are NEVER touched. Off by default — tag writes are irreversible without re-organizing."
+              checked={writeTagsOnOrganize}
+              onChange={() => setWriteTagsOnOrganize((v) => !v)}
+            />
+          </div>
         </Card>
 
         {/* Audible Integration */}

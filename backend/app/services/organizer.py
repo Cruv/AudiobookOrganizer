@@ -311,8 +311,59 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
         except Exception:
             logger.warning("Could not download cover for book %s", book.id, exc_info=True)
 
+    # Optionally write corrected tags into the destination files. Off
+    # by default — toggled via the `write_tags_on_organize` user
+    # setting. We patch only the COPIES we made; the source files are
+    # always left untouched as a rollback point.
+    if _tag_write_enabled(db) and any(bf.copy_status == "copied" for bf in book.files):
+        try:
+            _write_tags_to_destinations(book)
+        except Exception:
+            logger.warning("Tag write-back failed for book %s", book.id, exc_info=True)
+
 
 COVER_FILENAME = "cover.jpg"
+
+
+def _tag_write_enabled(db: Session) -> bool:
+    """True iff the user has flipped on the `write_tags_on_organize`
+    setting. Off by default — tag writes mutate the destination file
+    (irreversible without re-organizing) so it must be explicit."""
+    from app.models.settings import UserSetting
+
+    row = (
+        db.query(UserSetting)
+        .filter(UserSetting.key == "write_tags_on_organize")
+        .first()
+    )
+    if row is None or row.value is None:
+        return False
+    return row.value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _write_tags_to_destinations(book) -> None:
+    """Apply the book's current metadata to each copied destination."""
+    from app.services.tagwriter import write_book_tags
+
+    for bf in book.files:
+        if bf.copy_status != "copied" or not bf.destination_path:
+            continue
+        if not os.path.isfile(bf.destination_path):
+            continue
+        ok, err = write_book_tags(
+            bf.destination_path,
+            title=book.title,
+            author=book.author,
+            album=book.title,  # audiobook convention: album = book title
+            year=book.year,
+            narrator=book.narrator,
+            series=book.series,
+            series_position=book.series_position,
+        )
+        if not ok:
+            logger.warning(
+                "Tag write failed for %s: %s", bf.destination_path, err,
+            )
 # Cap cover downloads at 10 MB to defend against a misbehaving provider
 # pointing us at a huge image (or a redirect to something else entirely).
 _COVER_MAX_BYTES = 10 * 1024 * 1024

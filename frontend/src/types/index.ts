@@ -145,6 +145,7 @@ export interface Settings {
   google_books_api_key: string | null;
   audible_locale: string | null;
   registration_open?: string;
+  write_tags_on_organize?: boolean;
 }
 
 export interface PatternPreview {

@@ -26,7 +26,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
-SETTINGS_KEYS = ["output_pattern", "output_root", "google_books_api_key", "audible_locale", "registration_open"]
+SETTINGS_KEYS = [
+    "output_pattern", "output_root", "google_books_api_key",
+    "audible_locale", "registration_open",
+    # Off by default: when "true"/"1"/"yes", organize writes corrected
+    # metadata into the destination (copy) files via mutagen.
+    "write_tags_on_organize",
+]
 
 AUDIBLE_AUTH_FILE = "/app/data/audible_auth.json"
 
@@ -71,6 +77,9 @@ def get_settings(db: Session = Depends(get_db)):
     raw_key = settings_map.get("google_books_api_key")
     masked_key = f"****{raw_key[-4:]}" if raw_key and len(raw_key) > 4 else raw_key
 
+    write_tags_raw = settings_map.get("write_tags_on_organize") or ""
+    write_tags = write_tags_raw.strip().lower() in ("1", "true", "yes", "on")
+
     return SettingsResponse(
         output_pattern=settings_map.get(
             "output_pattern", app_settings.default_output_pattern
@@ -78,6 +87,7 @@ def get_settings(db: Session = Depends(get_db)):
         output_root=settings_map.get("output_root", app_settings.default_output_root),
         google_books_api_key=masked_key,
         audible_locale=settings_map.get("audible_locale", "us"),
+        write_tags_on_organize=write_tags,
     )
 
 
@@ -96,17 +106,32 @@ def update_settings(
             continue
 
         # Don't overwrite a real API key with the masked version sent back from GET
-        if key == "google_books_api_key" and value and value.startswith("****"):
+        if (
+            key == "google_books_api_key"
+            and isinstance(value, str)
+            and value.startswith("****")
+        ):
             continue
+
+        # Settings rows are TEXT. Coerce non-string values (e.g. the
+        # `write_tags_on_organize` boolean) to a canonical string form
+        # so subsequent reads can parse them consistently.
+        store_value: str | None
+        if isinstance(value, bool):
+            store_value = "true" if value else "false"
+        elif value is None:
+            store_value = None
+        else:
+            store_value = str(value)
 
         existing = db.query(UserSetting).filter(UserSetting.key == key).first()
         if existing:
-            if value is not None:
-                existing.value = value
+            if store_value is not None:
+                existing.value = store_value
             else:
                 db.delete(existing)
-        elif value is not None:
-            db.add(UserSetting(key=key, value=value))
+        elif store_value is not None:
+            db.add(UserSetting(key=key, value=store_value))
 
     db.commit()
     return get_settings(db)
