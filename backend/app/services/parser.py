@@ -448,12 +448,16 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
         return None
 
     # Take the last 2-3 meaningful parts. The 3-part interpretation
-    # (Author/Series/Title) is only used when the middle slot looks
-    # like a real series name — generic library/storage folders
-    # ("AudioBooks", "Downloads", "Torrents", ...) demote the path
-    # back to a 2-part interpretation so junk doesn't leak into the
-    # Series field.
-    if len(parts) >= 3 and not _is_generic_folder_name(parts[-2]):
+    # (Author/Series/Title) is only used when BOTH the author slot
+    # AND the series slot look like real names — generic library/
+    # storage folders ("AudioBooks", "Downloads", "Torrents",
+    # "Library", ...) demote the path back to a 2-part
+    # interpretation so junk doesn't leak into Author OR Series.
+    if (
+        len(parts) >= 3
+        and not _is_generic_folder_name(parts[-2])
+        and not _is_generic_folder_name(parts[-3])
+    ):
         author_candidate = parts[-3]
         series_candidate = parts[-2]
         title_candidate = parts[-1]

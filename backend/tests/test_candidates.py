@@ -172,7 +172,14 @@ class TestCandidatesService:
         scan = Scan(source_dir="/x", status="completed")
         db.add(scan)
         db.flush()
-        folder = ScannedFolder(scan_id=scan.id, folder_path="/x/book", folder_name="book")
+        # Folder path now matters: refresh_candidates parses it to
+        # build the lookup query and to score candidates against. Use
+        # a realistic 2-level path so author + title come through.
+        folder = ScannedFolder(
+            scan_id=scan.id,
+            folder_path="/Brandon Sanderson/The Way of Kings",
+            folder_name="The Way of Kings",
+        )
         db.add(folder)
         db.flush()
         book = Book(
