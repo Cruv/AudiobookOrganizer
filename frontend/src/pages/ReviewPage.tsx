@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Check,
   X,
@@ -17,6 +17,7 @@ import {
   Unlock,
   Pencil,
   FolderCheck,
+  FolderOutput,
   Trash2,
   RefreshCw,
 } from 'lucide-react';
@@ -34,7 +35,7 @@ import {
   useRelookupBatch,
 } from '@/hooks/useBooks';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { exportBooks } from '@/api/client';
+import { confirmBatch as confirmBatchApi, executeOrganize, exportBooks } from '@/api/client';
 import { ConfidenceBadge, SourceBadge, EditionBadge } from '@/components/ui/Badge';
 import BookEditModal from '@/components/BookEditModal';
 import SearchModal from '@/components/SearchModal';
@@ -152,6 +153,8 @@ export default function ReviewPage() {
   const deleteBook = useDeleteBook();
   const relookupBatch = useRelookupBatch();
   const toast = useToast();
+  const navigate = useNavigate();
+  const [isConfirmingAndOrganizing, setIsConfirmingAndOrganizing] = useState(false);
 
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [searchingBook, setSearchingBook] = useState<Book | null>(null);
@@ -210,6 +213,52 @@ export default function ReviewPage() {
         onError: () => toast.error('Failed to confirm books'),
       },
     );
+  };
+
+  /**
+   * One-click "Confirm & Organize": for every selected book, mark it
+   * confirmed (idempotent — already-confirmed books pass through) and
+   * kick off an organize for the ones that aren't already in a
+   * terminal state. After the organize queue is accepted, send the
+   * user to the Organize page where the existing per-book status
+   * poll surfaces progress. Cuts the previous flow from confirm →
+   * navigate → re-select → preview → organize down to a single click.
+   */
+  const handleConfirmAndOrganize = async () => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    setIsConfirmingAndOrganizing(true);
+    try {
+      // Step 1: confirm everything that isn't already confirmed.
+      // confirm-batch is idempotent — already-confirmed books pass
+      // through harmlessly.
+      await confirmBatchApi({ book_ids: ids });
+
+      // Step 2: filter to books not already in a terminal organize
+      // state so we don't re-copy over a successful previous organize.
+      const eligible = ids.filter((id) => {
+        const b = books?.find((x) => x.id === id);
+        return !b || b.organize_status === 'pending' || b.organize_status === 'failed';
+      });
+
+      if (eligible.length === 0) {
+        toast.success('All selected books were already organized.');
+        return;
+      }
+
+      await executeOrganize(eligible);
+      toast.success(
+        `Confirmed and queued ${eligible.length} book${eligible.length === 1 ? '' : 's'} to organize`,
+      );
+      clearSelection();
+      // Surface the in-flight progress on the Organize page where the
+      // existing per-book status poll lives.
+      navigate('/organize');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Confirm & organize failed');
+    } finally {
+      setIsConfirmingAndOrganizing(false);
+    }
   };
 
   const handleResetAllConfirmations = () => {
@@ -333,6 +382,16 @@ export default function ReviewPage() {
               <strong>{selectedIds.size}</strong> selected
             </span>
             <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="success"
+                size="sm"
+                icon={<FolderOutput size={14} />}
+                loading={isConfirmingAndOrganizing}
+                title="Confirm the selected books and immediately organize them — single click instead of Confirm → Organize → Preview → Organize."
+                onClick={handleConfirmAndOrganize}
+              >
+                Confirm &amp; Organize
+              </Button>
               <Button
                 size="sm"
                 icon={<Pencil size={14} />}

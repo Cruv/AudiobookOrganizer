@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { FolderOutput, Eye, FolderCheck, Undo2, History } from 'lucide-react';
-import { useBooks } from '@/hooks/useBooks';
+import { FolderOutput, Eye, FolderCheck, Undo2, History, X } from 'lucide-react';
+import { useBooks, useDeleteBook } from '@/hooks/useBooks';
 import { useQueryClient } from '@tanstack/react-query';
 import * as api from '@/api/client';
-import type { OrganizePreviewItem } from '@/types';
+import type { Book, OrganizePreviewItem } from '@/types';
 import { ConfidenceBadge } from '@/components/ui/Badge';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
@@ -21,6 +21,7 @@ type Tab = 'pending' | 'recent';
 export default function OrganizePage() {
   const toast = useToast();
   const qc = useQueryClient();
+  const deleteBook = useDeleteBook();
   const [tab, setTab] = useState<Tab>('pending');
 
   const { data: booksData, isLoading, refetch } = useBooks({
@@ -29,10 +30,13 @@ export default function OrganizePage() {
     page_size: 200,
   });
   const books = booksData?.items;
+  // "Recently organized" = organized + NOT yet purged. Once a book
+  // is purged it's fully done with the workflow — keeping it here
+  // would let the list balloon forever after a heavy purge pass.
   const { data: organizedData, refetch: refetchOrganized } = useBooks({
     organize_status: 'copied',
+    purge_status: 'not_purged',
     page_size: 200,
-    // Most-recent first so the user sees what they just did at the top.
     sort: 'created_at',
   });
   const organizedBooks = organizedData?.items;
@@ -44,6 +48,7 @@ export default function OrganizePage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [undoTargetIds, setUndoTargetIds] = useState<number[] | null>(null);
   const [isUndoing, setIsUndoing] = useState(false);
+  const [removingBook, setRemovingBook] = useState<Book | null>(null);
 
   // Poll per-book organize status while a batch is in flight.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -304,6 +309,25 @@ export default function OrganizePage() {
                   </p>
                 )}
               </div>
+              {/* Per-row Remove on the Recently-organized tab. Hits
+                  DELETE /api/books/{id} — drops the DB entry and the
+                  ScannedFolder so the next scan doesn't re-import the
+                  orphan. Files on disk are NOT touched (Undo is the
+                  flow for that). */}
+              {tab === 'recent' && (
+                <button
+                  type="button"
+                  className="flex-shrink-0 p-1 rounded hover:bg-red-900/40"
+                  title="Remove this entry from the list (does not touch files on disk)"
+                  aria-label={`Remove ${book.title || 'book'} from list`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRemovingBook(book);
+                  }}
+                >
+                  <X size={14} style={{ color: 'var(--color-text-muted)' }} />
+                </button>
+              )}
             </div>
           </Card>
         ))}
@@ -336,6 +360,33 @@ export default function OrganizePage() {
           confirmColor="var(--color-danger)"
           onConfirm={handleUndo}
           onCancel={() => setUndoTargetIds(null)}
+        />
+      )}
+
+      {removingBook && (
+        <ConfirmDialog
+          title="Remove from list?"
+          message={`Remove "${removingBook.title || 'this book'}" from the database. Files on disk are NOT touched — both originals and any organized copies stay exactly where they are. Use Undo instead if you want to delete the copied files and return the book to "pending".`}
+          confirmLabel="Remove Entry"
+          confirmColor="var(--color-danger)"
+          onConfirm={() => {
+            const id = removingBook.id;
+            setRemovingBook(null);
+            deleteBook.mutate(id, {
+              onSuccess: () => {
+                toast.success('Book removed from list');
+                setSelected((prev) => {
+                  const next = new Set(prev);
+                  next.delete(id);
+                  return next;
+                });
+                refetchOrganized();
+              },
+              onError: (err) =>
+                toast.error(err instanceof Error ? err.message : 'Failed to remove book'),
+            });
+          }}
+          onCancel={() => setRemovingBook(null)}
         />
       )}
     </div>

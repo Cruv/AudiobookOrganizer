@@ -56,6 +56,10 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 10, v1.20.0 — UX fluidity follow-up)
+- **Recently organized**: tab now filters to `purge_status: 'not_purged'` so books drop out once they're fully done (organized AND originals purged). Each row also gets an `X` Remove button (uses the existing `DELETE /api/books/{id}`) so the user can dismiss stuck/unwanted entries without touching files on disk.
+- **Confirm & Organize (one click)** on ReviewPage: new bulk action that runs `confirm-batch` then `executeOrganize` for the selected books, then navigates to the Organize page so the existing per-book status poll surfaces progress. Cuts the prior 5-step flow (confirm → navigate → re-select → preview → organize) down to one click for the common case. The Organize page stays untouched for users who want explicit preview-then-execute.
+
 ### Recent Changes (Session 2026-05-15 part 9, v1.19.0 — PR 8 of multi-PR audit pass — FINAL)
 - **Tag write-back (opt-in)** (`services/tagwriter.py`): new module that patches title/author/album/year/narrator/series tags on a destination file via mutagen. Supports MP3 (EasyID3), MP4/M4B (iTunes-style atoms), FLAC/OggVorbis (Vorbis comments). Source files are NEVER touched — we always write to the COPY only, so the user has a rollback point.
 - **Setting**: `write_tags_on_organize` (boolean, default false). New `Output options` card on SettingsPage with a Toggle. Off by default because tag writes are irreversible without re-organizing.
