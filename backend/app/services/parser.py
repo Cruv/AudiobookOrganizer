@@ -125,6 +125,35 @@ GENERIC_VALUES = re.compile(
     re.IGNORECASE,
 )
 
+# Folder names that are generic library/storage labels — never a real
+# series. Hit when a source dir like /downloads/Torrents/AudioBooks/X
+# would otherwise pick "AudioBooks" up as Series in the nested-folder
+# strategy. Compared case-insensitively against the raw segment AND
+# its cleaned form.
+GENERIC_FOLDER_NAMES = frozenset({
+    "audiobooks", "audiobook", "audio books", "audio book",
+    "books", "book", "library", "libraries",
+    "downloads", "download", "torrents", "torrent",
+    "media", "music", "video", "videos",
+    "shared", "share", "public", "private",
+    "new", "incoming", "inbox", "complete", "completed",
+    "processed", "unsorted", "sorted", "misc", "various",
+    "temp", "tmp", "staging", "scratch", "todo",
+    "audible", "kindle", "ebook", "ebooks", "epub",
+    "series", "collection", "anthology", "omnibus",
+})
+
+
+def _is_generic_folder_name(name: str | None) -> bool:
+    """True if `name` is a junk container folder we should never treat
+    as a series. Compared case- and punctuation-insensitively."""
+    if not name:
+        return False
+    normalized = re.sub(r"[^a-z0-9 ]", " ", name.lower()).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized in GENERIC_FOLDER_NAMES
+
+
 # Author names that are clearly not real people (franchises, publishers)
 SUSPECT_AUTHOR_PATTERNS = [
     re.compile(r"^\d+$"),  # Pure numbers
@@ -418,8 +447,13 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
     if len(parts) < 2:
         return None
 
-    # Take the last 2-3 meaningful parts
-    if len(parts) >= 3:
+    # Take the last 2-3 meaningful parts. The 3-part interpretation
+    # (Author/Series/Title) is only used when the middle slot looks
+    # like a real series name — generic library/storage folders
+    # ("AudioBooks", "Downloads", "Torrents", ...) demote the path
+    # back to a 2-part interpretation so junk doesn't leak into the
+    # Series field.
+    if len(parts) >= 3 and not _is_generic_folder_name(parts[-2]):
         author_candidate = parts[-3]
         series_candidate = parts[-2]
         title_candidate = parts[-1]
@@ -427,7 +461,6 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
         # Extract bracket position (e.g. [04]) before junk cleaning removes it
         bracket_pos, title_no_bracket = _extract_bracket_position(title_candidate)
 
-        # Check if the middle part looks like a series (short, might have numbers)
         author = _sanitize_name(_clean_text(author_candidate))
         series = _sanitize_name(_clean_text(series_candidate))
         title = _sanitize_name(_clean_text(_strip_leading_number(title_no_bracket)))
@@ -456,6 +489,11 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
             ):
                 final_title = series
 
+            # Final safety: if the series we derived turned out to be
+            # generic after cleaning (e.g. "audio book"), drop it.
+            if _is_generic_folder_name(series):
+                series = None
+
             # Lower confidence when author looks suspect (franchise, range, etc.)
             # so leaf-name strategies that correctly parse author can win
             confidence = 0.85
@@ -470,9 +508,16 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
                 confidence=confidence,
             )
 
+    # 2-part fallback (Author/Title). Also reached when the 3-part
+    # branch above bailed because the middle slot was a generic
+    # container folder.
     if len(parts) >= 2:
         author_candidate = parts[-2]
         title_candidate = parts[-1]
+        # If the immediate parent is generic too, we have no author
+        # signal from the path — leave author None for leaf strategies.
+        if _is_generic_folder_name(author_candidate):
+            return None
         author = _sanitize_name(_clean_text(author_candidate))
         title = _sanitize_name(_clean_text(_strip_leading_number(title_candidate)))
         if author and title:
@@ -702,6 +747,15 @@ def merge_with_tags(
     # Dedup: if series matches author, clear series (folder repeated author as series)
     if parsed.series and parsed.author and fuzzy_match(parsed.series, parsed.author):
         parsed.series = None
+
+    # Last-line defense: scrub junk container folder names that
+    # slipped through. Online lookup rarely returns a series and our
+    # merge keeps the locally-parsed one, so a folder name like
+    # "AudioBooks" would otherwise persist all the way to the output
+    # path's {Series} slot.
+    if parsed.series and _is_generic_folder_name(parsed.series):
+        parsed.series = None
+        parsed.series_position = None
 
     # Strip author name from end of title: "Ashes of Man Christopher Ruocchio" -> "Ashes of Man"
     if parsed.title and parsed.author and not _is_suspect_author(parsed.author):

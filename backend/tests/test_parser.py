@@ -141,6 +141,48 @@ class TestParseFolderPath:
         result = parse_folder_path("/audiobooks/Brandon Sanderson - The Final Empire (2006)")
         assert result.year == "2006"
 
+    def test_generic_parent_folder_not_promoted_to_series(self):
+        """Regression: /downloads/Torrents/AudioBooks/Cypher...
+        used to pick "AudioBooks" up as Series, which polluted the
+        output path with a stray /AudioBooks/ component. The
+        nested-folder strategy now rejects generic container folder
+        names ("AudioBooks", "Downloads", "Torrents", ...) so the
+        series stays empty for later strategies / lookup to fill."""
+        result = parse_folder_path(
+            "/downloads/Torrents/AudioBooks/Cypher, Lord of the Fallen",
+        )
+        # We don't care what title parsing picks here — just that the
+        # junk parent folder isn't promoted to Series.
+        if result is not None:
+            assert result.series != "AudioBooks"
+            assert result.series != "Torrents"
+
+    def test_audiobooks_folder_directly_under_audiobooks_is_clean(self):
+        """When the immediate parent IS a generic container, we have
+        no author signal from the path — return None so leaf strategies
+        get a chance instead of treating "AudioBooks" as the author."""
+        # Just the leaf-folder strategy should run; nested should bail.
+        from app.services.parser import _strategy_nested_folders
+
+        result = _strategy_nested_folders(
+            "/downloads/AudioBooks/Cypher, Lord of the Fallen",
+        )
+        assert result is None
+
+    def test_post_merge_scrub_clears_generic_series(self):
+        """If somehow a generic series leaks through (e.g. a tag
+        contains "audiobook"), merge_with_tags should clear it."""
+        from app.services.parser import ParsedMetadata, merge_with_tags
+
+        parsed = ParsedMetadata(
+            title="Cypher", author="John French",
+            series="AudioBooks", series_position="1",
+            year="2023", confidence=0.8,
+        )
+        merged = merge_with_tags(parsed, {})
+        assert merged.series is None
+        assert merged.series_position is None
+
 
 class TestParseFilePath:
     def test_author_dash_title(self):

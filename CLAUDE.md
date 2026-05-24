@@ -56,6 +56,14 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 11, v1.20.1 — generic-folder series bug fix)
+- **Bug**: paths like `/downloads/Torrents/AudioBooks/Cypher, Lord of the Fallen` were picking `AudioBooks` up as the `{Series}` value, polluting output paths with a stray `/AudioBooks/` component (e.g. `/audiobooks/John French/AudioBooks/2023 - Cypher - ...`). Online lookup rarely overwrites series, so the junk persisted.
+- **Fix** (`services/parser.py`): added `GENERIC_FOLDER_NAMES` blocklist + `_is_generic_folder_name()` helper. Applied in three places:
+  1. `_strategy_nested_folders` skips the 3-part Author/Series/Title interpretation when the middle slot is a generic container ("AudioBooks", "Downloads", "Torrents", "Library", "Audible", ...).
+  2. The 2-part fallback returns None when the parent is also generic — no author signal from the path.
+  3. `merge_with_tags` scrubs series at the end if it still matches the blocklist.
+- 3 new regression tests covering the exact `/downloads/Torrents/AudioBooks/...` path, the generic-parent-bails case, and post-merge scrub.
+
 ### Recent Changes (Session 2026-05-15 part 10, v1.20.0 — UX fluidity follow-up)
 - **Recently organized**: tab now filters to `purge_status: 'not_purged'` so books drop out once they're fully done (organized AND originals purged). Each row also gets an `X` Remove button (uses the existing `DELETE /api/books/{id}`) so the user can dismiss stuck/unwanted entries without touching files on disk.
 - **Confirm & Organize (one click)** on ReviewPage: new bulk action that runs `confirm-batch` then `executeOrganize` for the selected books, then navigates to the Organize page so the existing per-book status poll surfaces progress. Cuts the prior 5-step flow (confirm → navigate → re-select → preview → organize) down to one click for the common case. The Organize page stays untouched for users who want explicit preview-then-execute.
