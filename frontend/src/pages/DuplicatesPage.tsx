@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, Check, Trash2 } from 'lucide-react';
+import { Copy, Check, Trash2, AlertTriangle } from 'lucide-react';
 import * as api from '@/api/client';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useToast } from '@/components/Toast';
@@ -20,9 +20,12 @@ import type { DuplicateGroup, DuplicateBook } from '@/types';
 export default function DuplicatesPage() {
   const qc = useQueryClient();
   const toast = useToast();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['duplicates'],
     queryFn: api.getDuplicates,
+    // Don't auto-retry — the endpoint can take a while at scale and
+    // hammering it on error just delays the visible error state.
+    retry: false,
   });
 
   // Per-group: which book id the user has picked to keep.
@@ -33,11 +36,40 @@ export default function DuplicatesPage() {
     deleteIds: number[];
   } | null>(null);
 
-  if (isLoading || !data) {
+  // Loading vs error vs ready — was previously `isLoading || !data`
+  // which fell through to infinite skeleton on error.
+  if (isLoading) {
     return (
       <div>
         <h1 className="text-2xl font-bold mb-6">Duplicates</h1>
         <PageSkeleton />
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Duplicates</h1>
+        <Card>
+          <div className="flex items-start gap-3 mb-3">
+            <AlertTriangle
+              size={18}
+              style={{ color: 'var(--color-danger)', flexShrink: 0, marginTop: 2 }}
+            />
+            <div>
+              <p className="text-sm font-medium">Couldn't load duplicates.</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                {error instanceof Error
+                  ? error.message
+                  : 'The server returned no response.'}
+              </p>
+            </div>
+          </div>
+          <Button size="sm" loading={isFetching} onClick={() => refetch()}>
+            Retry
+          </Button>
+        </Card>
       </div>
     );
   }

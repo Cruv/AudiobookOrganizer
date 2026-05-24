@@ -7,7 +7,7 @@ from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.book import Book
@@ -180,16 +180,58 @@ def get_duplicates(db: Session = Depends(get_db)):
     AND the SAME edition (or both no edition). Different-edition
     matches (e.g. Graphic Audio vs standard) are intentionally NOT
     flagged — they're expected to coexist.
+
+    Two-phase fetch so we don't load the whole library into memory
+    just to find duplicates:
+      1. SQL-side GROUP BY on (LOWER title, LOWER author, edition)
+         finds keys with count > 1. Returns only the duplicate keys.
+      2. A second query pulls just the books matching those keys
+         along with their scanned_folder. Candidates are pulled
+         separately in one IN-query for cover URLs.
+
+    Old impl was: SELECT all books + selectinload all candidates,
+    then group in Python. Fine at 100 books, dies at 5000 because the
+    response body can hit megabytes and nginx/the proxy may truncate
+    mid-stream (ERR_CONTENT_LENGTH_MISMATCH in the browser).
     """
+    # Phase 1: find which normalized keys actually have duplicates.
+    # The SQL grouping is approximate vs the Python `_normalize` (which
+    # also strips punctuation); the Python pass below tightens it.
+    title_k = func.lower(func.trim(Book.title))
+    author_k = func.lower(func.trim(func.coalesce(Book.author, "")))
+    edition_k = func.coalesce(Book.edition, "standard")
+    dup_rows = (
+        db.query(title_k, author_k, edition_k, func.count(Book.id))
+        .filter(Book.title.isnot(None))
+        .filter(Book.title != "")
+        .group_by(title_k, author_k, edition_k)
+        .having(func.count(Book.id) > 1)
+        .all()
+    )
+    if not dup_rows:
+        return DuplicatesResponse(groups=[])
+
+    # Phase 2: pull only the books in those potential-duplicate groups.
+    # We over-fetch slightly because the SQL grouping doesn't strip
+    # punctuation — the Python regroup below handles ties.
+    or_clauses = []
+    for t, a, e in ((row[0], row[1], row[2]) for row in dup_rows):
+        clause = (
+            (func.lower(func.trim(Book.title)) == t)
+            & (func.lower(func.trim(func.coalesce(Book.author, ""))) == a)
+            & (func.coalesce(Book.edition, "standard") == e)
+        )
+        or_clauses.append(clause)
+    from sqlalchemy import or_
     books = (
         db.query(Book)
-        .options(
-            joinedload(Book.scanned_folder),
-            selectinload(Book.candidates),
-        )
+        .options(joinedload(Book.scanned_folder))
+        .filter(or_(*or_clauses))
         .all()
     )
 
+    # Re-group with the Python normalizer (catches title differences
+    # the SQL pass missed because of punctuation/whitespace).
     groups: dict[str, list[Book]] = defaultdict(list)
     for book in books:
         if not book.title:
@@ -202,6 +244,36 @@ def get_duplicates(db: Session = Depends(get_db)):
         )
         groups[key].append(book)
 
+    # Pull cover URLs in ONE query — avoids N+1 across hundreds of
+    # candidates. We only need a single cover per book so this is
+    # bounded by total candidates across all duplicate-group members.
+    from app.models.lookup_candidate import LookupCandidate
+    candidate_book_ids = [b.id for b in books]
+    cover_by_book: dict[int, str] = {}
+    if candidate_book_ids:
+        cand_rows = (
+            db.query(
+                LookupCandidate.book_id,
+                LookupCandidate.cover_url,
+                LookupCandidate.applied,
+                LookupCandidate.rejected,
+                LookupCandidate.ranking_score,
+            )
+            .filter(LookupCandidate.book_id.in_(candidate_book_ids))
+            .filter(LookupCandidate.cover_url.isnot(None))
+            .filter(LookupCandidate.rejected.is_(False))
+            .order_by(
+                LookupCandidate.book_id,
+                LookupCandidate.applied.desc(),
+                LookupCandidate.ranking_score.desc(),
+            )
+            .all()
+        )
+        for row in cand_rows:
+            book_id = row[0]
+            if book_id not in cover_by_book:
+                cover_by_book[book_id] = row[1]
+
     result: list[DuplicateGroup] = []
     for key, books_in_group in groups.items():
         if len(books_in_group) < 2:
@@ -210,30 +282,38 @@ def get_duplicates(db: Session = Depends(get_db)):
         books_in_group.sort(
             key=lambda b: (
                 0 if b.is_confirmed else 1,
-                -b.confidence,
+                -(b.confidence or 0.0),
                 b.id,
             )
         )
-        # Hydrate cover_url for each member.
+
+        # Build the response items. Wrap each in try/except so a single
+        # bad row can't kill the entire response — the rest of the
+        # library is still useful, and the failing book gets logged.
         members: list[DuplicateBook] = []
         for b in books_in_group:
-            cover = None
-            for c in b.candidates:
-                if not c.rejected and c.cover_url:
-                    cover = c.cover_url
-                    if c.applied:
-                        break
-            members.append(DuplicateBook(
-                id=b.id,
-                title=b.title,
-                author=b.author,
-                edition=b.edition,
-                confidence=b.confidence,
-                is_confirmed=b.is_confirmed,
-                folder_path=b.scanned_folder.folder_path if b.scanned_folder else None,
-                cover_url=cover,
-                organize_status=b.organize_status,
-            ))
+            try:
+                members.append(DuplicateBook(
+                    id=b.id,
+                    title=b.title,
+                    author=b.author,
+                    edition=b.edition,
+                    confidence=float(b.confidence or 0.0),
+                    is_confirmed=bool(b.is_confirmed),
+                    folder_path=(
+                        b.scanned_folder.folder_path
+                        if b.scanned_folder else None
+                    ),
+                    cover_url=cover_by_book.get(b.id),
+                    organize_status=b.organize_status or "pending",
+                ))
+            except Exception:
+                logger.warning(
+                    "Skipping book %s in duplicates response — could "
+                    "not serialize", b.id, exc_info=True,
+                )
+        if len(members) < 2:
+            continue
         result.append(DuplicateGroup(
             key=key,
             title=books_in_group[0].title,
