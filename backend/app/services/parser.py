@@ -532,7 +532,7 @@ def _strategy_nested_folders(folder_path: str) -> ParsedMetadata | None:
     return None
 
 
-def parse_file_path(file_path: str) -> ParsedMetadata:
+def parse_file_path(file_path: str, source_root: str | None = None) -> ParsedMetadata:
     """Parse a loose audiobook file (e.g. standalone .m4b) for metadata.
 
     Strips the audio extension and parses the filename through the leaf
@@ -540,19 +540,74 @@ def parse_file_path(file_path: str) -> ParsedMetadata:
     loose audiobook files typically live in a downloads/library root
     whose name ('downloads', 'audiobooks', ...) would mislead the
     nested-folder strategy into reporting it as an author.
+
+    `source_root` is accepted for signature parity with `parse_folder_path`
+    but isn't used here (loose files always parse from the leaf only).
     """
     import os as _os
 
     base, _ext = _os.path.splitext(file_path)
     leaf = base.replace("\\", "/").rstrip("/").split("/")[-1]
-    return parse_folder_path(leaf)
+    return parse_folder_path(leaf, source_root=source_root)
 
 
-def parse_folder_path(folder_path: str) -> ParsedMetadata:
+def _path_below_root(folder_path: str, source_root: str) -> str:
+    """Return `folder_path` made relative to `source_root` when it lives
+    underneath it, else return `folder_path` unchanged.
+
+    This is the core of "don't consider anything above the scan root"
+    — a book at /downloads/Torrents/AudioBooks/Cypher scanned from
+    /downloads/Torrents/AudioBooks/ becomes just "Cypher" before the
+    nested-folder strategy sees it, so the parent dirs never get
+    interpreted as Author/Series.
+
+    Defensive: if relpath fails (different drives on Windows, weird
+    inputs, source_root not actually a prefix), returns the original
+    path so we degrade to the old behavior instead of crashing.
+    """
+    import os as _os
+
+    if not source_root:
+        return folder_path
+    try:
+        normalized_folder = _os.path.normpath(folder_path)
+        normalized_root = _os.path.normpath(source_root)
+        relative = _os.path.relpath(normalized_folder, normalized_root)
+    except ValueError:
+        # relpath can raise on Windows when the two paths live on
+        # different drives — fall back to the absolute path.
+        return folder_path
+    # `relpath` returns ".." paths when folder isn't actually under
+    # the root. In that case the relative form is misleading; keep
+    # the original.
+    if relative.startswith(".."):
+        return folder_path
+    if relative in (".", ""):
+        # Caller asked us to parse the root itself — nothing meaningful
+        # to extract from "above" because there is no above.
+        return folder_path
+    return relative
+
+
+def parse_folder_path(
+    folder_path: str, source_root: str | None = None,
+) -> ParsedMetadata:
     """Parse an audiobook folder path to extract metadata.
 
     Tries multiple strategies and returns the best result by confidence.
+
+    If `source_root` is provided, the path is interpreted as if rooted
+    at `source_root` — anything above is treated as user-defined
+    storage organization (downloads/, library/, Torrents/, etc.) and
+    NEVER considered as Author/Series. This is the architectural fix
+    for the "AudioBooks ended up as series" class of bug; the
+    GENERIC_FOLDER_NAMES blocklist below stays as a secondary defense
+    for paths the scoping pass doesn't help with (e.g. weird subfolders
+    BENEATH the scan root, or callers that don't pass source_root).
     """
+    # Scope to the scan root if we have one.
+    folder_path = _path_below_root(folder_path, source_root) if source_root else folder_path
+
     # Get just the leaf folder name for pattern matching
     leaf = folder_path.replace("\\", "/").rstrip("/").split("/")[-1]
 

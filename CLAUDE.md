@@ -56,6 +56,12 @@ frontend/src/
 
 ## Current Status (Last Updated: 2026-05-15)
 
+### Recent Changes (Session 2026-05-15 part 14, v1.21.1 — parser scoped to scan source_root)
+- **Architectural fix for parents-above-scan-root**: `parse_folder_path(path, source_root=...)` now optionally takes the scan's source_dir and strips it from the path before running the nested-folder strategy. So `/downloads/Torrents/AudioBooks/Cypher` scanned from root `/downloads/Torrents/AudioBooks` becomes just `Cypher` before any parent-dir analysis runs. Replaces the previous reliance on the `GENERIC_FOLDER_NAMES` blocklist as the primary defense (blocklist still present as backup for weird structures BENEATH the scan root).
+- **Threaded through callers**: `scanner._process_folder` and `_process_loose_file` pass `scan.source_dir`. `candidates.refresh_candidates` re-derives the source_root from `book.scanned_folder.scan.source_dir` so re-lookups use the same scoping as the original scan.
+- **Defensive**: `_path_below_root` returns the original path on Windows different-drive `ValueError`, on `..` results (folder isn't actually under the claimed root), and on root-equals-folder, so backward compatibility is preserved when source_root is omitted or unhelpful.
+- 4 new parser tests cover scoping behavior: parents above the root stripped, structure BELOW the root preserved, trailing-slash normalization, and the unrelated-path fall-through.
+
 ### Recent Changes (Session 2026-05-15 part 13, v1.21.0 — lookup priority rework)
 - **Folder-only query for lookup** (`services/candidates.py`): `refresh_candidates` now re-parses `book.scanned_folder.folder_path` and uses the folder-parsed title/author for BOTH the query string AND the candidate-scoring `ParsedMetadata`. Falls back to `book.title`/`book.author` when the folder parse turns up nothing or no scanned_folder exists. Stops tag-poisoned book fields (publisher in author, "audiobook" in title) from dragging Audible's match scores below the apply threshold.
 - **Per-provider auto-apply thresholds** (`services/candidates.py`): replaced the single 0.80 cutoff with provider-specific bars — Audible 0.50, iTunes 0.65, Google 0.75, OpenLibrary 0.80. Walks providers in priority order (Audible → iTunes → Google → OL) and applies the first provider whose top candidate clears its threshold. Audible-first beats picking the globally highest-ranked candidate when Audible has a plausible answer.

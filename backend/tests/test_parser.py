@@ -169,6 +169,66 @@ class TestParseFolderPath:
         )
         assert result is None
 
+    # --- source_root scoping (architectural fix) ------------------
+
+    def test_source_root_strips_irrelevant_parents(self):
+        """The user's complaint: parents above the scan root
+        (downloads/Torrents/AudioBooks/) were being interpreted as
+        Author/Series. With source_root scoping, only what's BELOW
+        the scan root is considered."""
+        # Without source_root, the path would try to interpret
+        # "Torrents" / "AudioBooks" as Author / Series.
+        result = parse_folder_path(
+            "/downloads/Torrents/AudioBooks/Cypher, Lord of the Fallen",
+            source_root="/downloads/Torrents/AudioBooks",
+        )
+        # Relative path is just "Cypher, Lord of the Fallen" → no
+        # author/series available, just a title.
+        assert result is not None
+        assert result.series is None
+        # The parent dirs should NOT contribute to author either.
+        assert result.author not in ("Torrents", "downloads", "AudioBooks")
+
+    def test_source_root_keeps_nested_structure_below_root(self):
+        """When books ARE organized as Author/Series/Title under the
+        scan root, that structure SHOULD still be picked up — scoping
+        only strips parents ABOVE the root."""
+        result = parse_folder_path(
+            "/downloads/Torrents/AudioBooks/Brandon Sanderson/Mistborn/The Final Empire",
+            source_root="/downloads/Torrents/AudioBooks",
+        )
+        assert result is not None
+        assert result.author == "Brandon Sanderson"
+        assert result.series == "Mistborn"
+        assert result.title == "The Final Empire"
+
+    def test_source_root_with_trailing_slash(self):
+        """Source root with or without a trailing slash should behave
+        the same — both normalize to the same path."""
+        a = parse_folder_path(
+            "/audiobooks/Sanderson/Way of Kings",
+            source_root="/audiobooks",
+        )
+        b = parse_folder_path(
+            "/audiobooks/Sanderson/Way of Kings",
+            source_root="/audiobooks/",
+        )
+        assert a.title == b.title
+        assert a.author == b.author
+
+    def test_source_root_unrelated_path_falls_through(self):
+        """If the folder isn't actually under source_root (defensive
+        — shouldn't happen in practice), don't pretend to scope."""
+        # /elsewhere/Book is NOT under /downloads — relpath would
+        # return "../../elsewhere/Book" which is garbage. We fall
+        # back to absolute-path parsing.
+        result = parse_folder_path(
+            "/elsewhere/Book",
+            source_root="/downloads",
+        )
+        # Just don't crash and return something sensible.
+        assert result is not None
+
     def test_post_merge_scrub_clears_generic_series(self):
         """If somehow a generic series leaks through (e.g. a tag
         contains "audiobook"), merge_with_tags should clear it."""

@@ -334,8 +334,10 @@ def _process_folder(folder_path: str, scan: Scan, db: Session) -> Book | None:
         scanned_folder.error_message = "No audio files found"
         return None
 
-    # Parse folder name
-    parsed = parse_folder_path(folder_path)
+    # Parse folder name, scoped to the scan root so parent dirs above
+    # the source_dir (downloads/, Torrents/, etc.) never get
+    # interpreted as Author/Series.
+    parsed = parse_folder_path(folder_path, source_root=scan.source_dir)
 
     # Read consensus tags from multiple files. The cache dict lets us
     # reuse the same mutagen reads when populating per-file BookFile
@@ -452,8 +454,9 @@ def _process_loose_file(file_path: str, scan: Scan, db: Session) -> Book | None:
         scanned_folder.error_message = "File not found"
         return None
 
-    # Parse metadata from the filename
-    parsed = parse_file_path(file_path)
+    # Parse metadata from the filename (loose files parse from the
+    # leaf only, but pass source_root for signature parity).
+    parsed = parse_file_path(file_path, source_root=scan.source_dir)
 
     # Read tags from this single file
     tags = read_tags(file_path)

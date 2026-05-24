@@ -96,7 +96,17 @@ async def refresh_candidates(
     folder_author: str | None = None
     if book.scanned_folder and book.scanned_folder.folder_path:
         try:
-            folder_parsed = parse_folder_path(book.scanned_folder.folder_path)
+            # Scope the re-parse to the original scan's source_dir so
+            # we match the scan-time interpretation — folder paths
+            # above the scan root never get treated as Author/Series.
+            scan_root: str | None = None
+            scan_obj = getattr(book.scanned_folder, "scan", None)
+            if scan_obj is not None:
+                scan_root = getattr(scan_obj, "source_dir", None)
+            folder_parsed = parse_folder_path(
+                book.scanned_folder.folder_path,
+                source_root=scan_root,
+            )
             if folder_parsed:
                 folder_title = folder_parsed.title
                 folder_author = folder_parsed.author
