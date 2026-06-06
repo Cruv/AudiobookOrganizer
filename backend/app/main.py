@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.11.2"
+APP_VERSION = "1.11.3"
 
 app = FastAPI(
     title="Audiobook Organizer",
@@ -208,6 +208,12 @@ def _check_api_rate_limit(client_ip: str) -> bool:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     global _has_users_cache
+
+    # CORS preflight (OPTIONS) carries no credentials and must be answered by
+    # CORSMiddleware — never rate-limit or auth-block it here.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     path = request.url.path
 
     # Only protect /api/* routes (static files, health check etc. pass through)
@@ -264,16 +270,17 @@ app.include_router(settings_router.router)
 @app.get("/api/health")
 def health_check():
     import sqlalchemy as sa
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         db.execute(sa.text("SELECT 1"))
-        db.close()
         return {"status": "ok", "database": "connected", "version": APP_VERSION}
     except Exception:
         return JSONResponse(
             status_code=503,
             content={"status": "degraded", "database": "unavailable"},
         )
+    finally:
+        db.close()
 
 
 # Serve static frontend files in production

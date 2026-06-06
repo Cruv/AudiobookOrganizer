@@ -22,7 +22,7 @@ export default function ScanPage() {
   const deleteScan = useDeleteScan();
 
   const handleStartScan = () => {
-    if (!sourceDir.trim()) return;
+    if (!sourceDir.trim() || createScan.isPending) return;
     createScan.mutate(sourceDir.trim(), {
       onSuccess: (scan) => setActiveScanId(scan.id),
     });
@@ -82,10 +82,10 @@ export default function ScanPage() {
             Browse
           </Button>
           <Button
-            icon={isScanning ? undefined : <FolderSearch size={16} />}
-            loading={isScanning}
+            icon={isScanning || createScan.isPending ? undefined : <FolderSearch size={16} />}
+            loading={isScanning || createScan.isPending}
             onClick={handleStartScan}
-            disabled={!sourceDir.trim()}
+            disabled={!sourceDir.trim() || createScan.isPending}
           >
             {isScanning ? 'Scanning...' : 'Start Scan'}
           </Button>

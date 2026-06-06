@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ShieldCheck, Trash2, FolderOutput, CheckCircle, AlertTriangle } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
@@ -21,6 +21,13 @@ export default function PurgePage() {
   const [isPurging, setIsPurging] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // Any change to the selection invalidates prior verification results, so a
+  // purge can never run against a verify of a *different* selection (which
+  // could delete originals whose copies were never actually verified).
+  useEffect(() => {
+    setVerifications(new Map());
+  }, [selected]);
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => {

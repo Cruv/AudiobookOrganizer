@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -206,7 +207,13 @@ def register(
         expires_at=UserSession.default_expiry(),
     )
     db.add(session)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent registration claimed this username between our check
+        # and commit — return a clean 400 instead of an unhandled 500.
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Username already taken") from None
 
     logger.info("User registered: %s (admin=%s)", username, user.is_admin)
 
@@ -248,6 +255,7 @@ def login(
 
 @router.post("/logout")
 def logout(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     session_token: str | None = Cookie(None),
@@ -256,7 +264,16 @@ def logout(
     if session_token:
         db.query(UserSession).filter(UserSession.token == session_token).delete()
         db.commit()
-    response.delete_cookie(key="session_token", path="/")
+    # Match the attributes used when the cookie was set so strict browsers
+    # actually clear it (a Secure/SameSite cookie isn't cleared by a bare delete).
+    is_https = request.headers.get("x-forwarded-proto") == "https"
+    response.delete_cookie(
+        key="session_token",
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+    )
     return {"detail": "Logged out"}
 
 

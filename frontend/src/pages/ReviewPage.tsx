@@ -117,9 +117,10 @@ export default function ReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanId, sort, page, debouncedSearch, filterEdition, filterConfirmed, filterConfidence]);
 
-  // Reset page on filter change
+  // Reset page on filter OR scan change (changing scans kept a stale page,
+  // which could land on an empty, unrecoverable page on a smaller scan).
   const resetPage = useCallback(() => setPage(1), []);
-  useEffect(() => { resetPage(); }, [debouncedSearch, filterEdition, filterConfirmed, filterConfidence, sort, resetPage]);
+  useEffect(() => { resetPage(); }, [scanId, debouncedSearch, filterEdition, filterConfirmed, filterConfidence, sort, resetPage]);
 
   const { data: booksData, isLoading, isFetching } = useBooks({
     scan_id: scanId,
@@ -135,6 +136,15 @@ export default function ReviewPage() {
   const books = booksData?.items;
   const totalPages = booksData?.total_pages || 1;
   const totalCount = booksData?.total || 0;
+
+  // If the current page is past the end of the result set (deep-linked
+  // ?page=N too high, or a filter shrank the set), snap back into range so
+  // the user isn't stranded on an empty page with no way back. Done during
+  // render (React's "adjust state while rendering" pattern) so the empty page
+  // never paints, and it self-terminates once page <= totalPages.
+  if (booksData && page > totalPages) {
+    setPage(totalPages);
+  }
 
   const confirmBook = useConfirmBook();
   const confirmBatch = useConfirmBatch();
@@ -581,6 +591,7 @@ export default function ReviewPage() {
       {editingBook && (
         <BookEditModal
           book={editingBook}
+          isSaving={updateBook.isPending}
           onSave={(data) => {
             updateBook.mutate(
               { id: editingBook.id, data },

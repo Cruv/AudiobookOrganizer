@@ -14,9 +14,10 @@ interface Props {
     edition?: string | null;
   }) => void;
   onClose: () => void;
+  isSaving?: boolean;
 }
 
-export default function BookEditModal({ book, onSave, onClose }: Props) {
+export default function BookEditModal({ book, onSave, onClose, isSaving }: Props) {
   const [title, setTitle] = useState(book.title || '');
   const [author, setAuthor] = useState(book.author || '');
   const [series, setSeries] = useState(book.series || '');
@@ -27,6 +28,7 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     onSave({
       title: title || undefined,
       author: author || undefined,
@@ -55,10 +57,14 @@ export default function BookEditModal({ book, onSave, onClose }: Props) {
       onClose={onClose}
       footer={
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent)}>
+          <Button
+            onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent)}
+            loading={isSaving}
+            disabled={isSaving}
+          >
             Save
           </Button>
         </div>

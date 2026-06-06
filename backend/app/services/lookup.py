@@ -493,7 +493,12 @@ async def search_audible(
             if series_list:
                 primary = series_list[0]
                 series_name = primary.get("title")
-                series_pos = primary.get("sequence")
+                # Audible's sequence is frequently numeric. LookupResult.
+                # series_position is str|None and Pydantic v2 won't coerce
+                # int->str — it raises, and the broad except below would
+                # then drop ALL Audible results. Stringify explicitly.
+                seq = primary.get("sequence")
+                series_pos = str(seq) if seq is not None else None
 
             # Cover image
             images = product.get("product_images") or {}

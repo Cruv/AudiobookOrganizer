@@ -57,6 +57,14 @@ AUDIBLE_ALLOWED_REDIRECT_DOMAINS = {
 # Each session holds threading events + shared state so a single from_login_external()
 # call can span the login-url and authorize HTTP endpoints.
 _audible_sessions: dict[str, dict] = {}
+# Guards _audible_sessions: it's read/written from request-handler threads AND
+# the background `audible-auth` daemon thread, so unguarded access races
+# (dictionary-changed-during-iteration, lost sessions).
+_audible_lock = threading.Lock()
+
+# Marketplaces the audible package supports. Used both to validate the login
+# request and to reject a bad locale before it's persisted to settings.
+VALID_AUDIBLE_LOCALES = {"us", "uk", "ca", "au", "de", "fr", "it", "in", "jp", "es"}
 
 
 @router.get("", response_model=SettingsResponse)
@@ -77,6 +85,7 @@ def get_settings(db: Session = Depends(get_db)):
         output_root=settings_map.get("output_root", app_settings.default_output_root),
         google_books_api_key=masked_key,
         audible_locale=settings_map.get("audible_locale", "us"),
+        registration_open=settings_map.get("registration_open"),
     )
 
 
@@ -84,6 +93,17 @@ def get_settings(db: Session = Depends(get_db)):
 def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
     """Update settings."""
     update_data = body.model_dump(exclude_unset=True)
+
+    # Validate values that feed downstream filesystem / API behavior before
+    # persisting them (the schema only bounds length).
+    locale = update_data.get("audible_locale")
+    if locale is not None and locale not in VALID_AUDIBLE_LOCALES:
+        raise HTTPException(status_code=400, detail="Invalid audible_locale")
+    root = update_data.get("output_root")
+    if root is not None and ("\x00" in root or not root.startswith("/")):
+        raise HTTPException(
+            status_code=400, detail="output_root must be an absolute path"
+        )
 
     for key, value in update_data.items():
         if key not in SETTINGS_KEYS:
@@ -107,7 +127,7 @@ def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
 
 
 @router.get("/preview-pattern", response_model=PatternPreview)
-def preview_pattern(pattern: str = Query(...)):
+def preview_pattern(pattern: str = Query(..., max_length=512)):
     """Preview a naming pattern with sample data."""
     sample_tokens = {
         "{NarratorBraced}": "{Michael Kramer}",
@@ -153,15 +173,18 @@ def preview_pattern(pattern: str = Query(...)):
 def _cleanup_stale_sessions() -> None:
     """Remove sessions older than 10 minutes to prevent memory/thread leaks."""
     now = time.monotonic()
-    stale = [
-        token for token, session in _audible_sessions.items()
-        if now - session.get("created_at", 0) > 600
-    ]
-    for token in stale:
-        session = _audible_sessions.pop(token, None)
+    with _audible_lock:
+        stale = [
+            token for token, session in _audible_sessions.items()
+            if now - session.get("created_at", 0) > 600
+        ]
+        removed = [_audible_sessions.pop(token, None) for token in stale]
+    # Signal waiting threads outside the lock.
+    for session in removed:
         if session:
-            # Signal the waiting thread so it can exit
-            session["response_url_ready"].set()
+            ev = session.get("response_url_ready")
+            if ev is not None:
+                ev.set()
             logger.info("Cleaned up stale Audible login session")
 
 
@@ -192,15 +215,15 @@ def audible_login_url(locale: str = "us"):
     the response URL.
     """
     # Validate locale
-    valid_locales = {"us", "uk", "ca", "au", "de", "fr", "it", "in", "jp", "es"}
-    if locale not in valid_locales:
+    if locale not in VALID_AUDIBLE_LOCALES:
         raise HTTPException(status_code=400, detail="Invalid locale")
 
     # Clean up any stale sessions first
     _cleanup_stale_sessions()
 
-    if len(_audible_sessions) >= MAX_AUDIBLE_SESSIONS:
-        raise HTTPException(status_code=429, detail="Too many pending login sessions. Please try again later.")
+    with _audible_lock:
+        if len(_audible_sessions) >= MAX_AUDIBLE_SESSIONS:
+            raise HTTPException(status_code=429, detail="Too many pending login sessions. Please try again later.")
 
     try:
         import audible  # noqa: F401 — verify package is installed
@@ -273,7 +296,8 @@ def audible_login_url(locale: str = "us"):
         raise HTTPException(status_code=500, detail="Failed to generate login URL")
 
     # Store session for the authorize endpoint
-    _audible_sessions[session_token] = session
+    with _audible_lock:
+        _audible_sessions[session_token] = session
 
     logger.info("Audible login URL generated for locale=%s (thread waiting for response URL)", locale)
     return AudibleLoginUrlResponse(login_url=session["login_url"], session_token=session_token)
@@ -287,7 +311,7 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
     the from_login_external() OAuth flow.
     """
     # Validate session token (CSRF protection)
-    if not body.session_token or body.session_token not in _audible_sessions:
+    if not body.session_token:
         raise HTTPException(
             status_code=400,
             detail="Invalid or expired session. Please restart the Audible connection process.",
@@ -306,7 +330,15 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
             detail="Invalid redirect URL. Expected an Amazon URL from the login redirect.",
         )
 
-    session = _audible_sessions.pop(body.session_token)
+    # Atomically claim the session so two concurrent authorize calls can't
+    # both pop it (the second would KeyError).
+    with _audible_lock:
+        session = _audible_sessions.pop(body.session_token, None)
+    if session is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired session. Please restart the Audible connection process.",
+        )
 
     # Provide the response URL to the waiting background thread
     session["response_url"] = body.response_url.strip()
@@ -329,7 +361,10 @@ def audible_authorize(body: AudibleAuthorize, db: Session = Depends(get_db)):
     locale = body.locale or session.get("locale", "us")
 
     try:
-        # Save auth to persistent file with restrictive permissions
+        # Save auth to persistent file with restrictive permissions. Ensure
+        # the data dir exists first so a missing mount doesn't 500 *after*
+        # the user already completed the browser OAuth round-trip.
+        os.makedirs(os.path.dirname(AUDIBLE_AUTH_FILE), exist_ok=True)
         auth.to_file(AUDIBLE_AUTH_FILE)
         os.chmod(AUDIBLE_AUTH_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 0600
         logger.info("Audible authentication saved successfully (permissions: 0600)")
@@ -356,7 +391,11 @@ def audible_disconnect():
         os.remove(AUDIBLE_AUTH_FILE)
         logger.info("Audible auth file removed (disconnected)")
     # Clear any pending login sessions and signal waiting threads
-    for session in _audible_sessions.values():
-        session["response_url_ready"].set()
-    _audible_sessions.clear()
+    with _audible_lock:
+        sessions = list(_audible_sessions.values())
+        _audible_sessions.clear()
+    for session in sessions:
+        ev = session.get("response_url_ready")
+        if ev is not None:
+            ev.set()
     return {"detail": "Audible disconnected"}

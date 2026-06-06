@@ -31,6 +31,7 @@ export default function SearchModal({ book, onClose }: Props) {
   };
 
   const handleApply = (provider: string, index: number) => {
+    if (applyLookup.isPending) return;
     applyLookup.mutate(
       { id: book.id, data: { provider, result_index: index } },
       {
@@ -87,7 +88,10 @@ export default function SearchModal({ book, onClose }: Props) {
         </p>
       )}
       {results && results.length > 0 && (
-        <div className="space-y-2">
+        <div
+          className="space-y-2"
+          style={applyLookup.isPending ? { opacity: 0.6, pointerEvents: 'none' } : undefined}
+        >
           {results.map((result, idx) => (
             <div
               key={idx}

@@ -23,6 +23,12 @@ class TestCleanQuery:
         result = clean_query("The Final Empire 2006")
         assert "2006" not in result
 
+    def test_bare_year_title_survives(self):
+        # A title that IS a 4-digit number must not be stripped to empty,
+        # which would search by author alone and mis-match.
+        assert clean_query("1984") == "1984"
+        assert clean_query("1984", "George Orwell") == "1984 George Orwell"
+
     def test_title_and_author(self):
         result = clean_query("The Final Empire", "Brandon Sanderson")
         assert "The Final Empire" in result

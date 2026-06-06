@@ -15,6 +15,9 @@ browse_router = APIRouter(prefix="/api", tags=["browse"])
 BROWSE_BLOCKED_PATHS = {
     "/proc", "/sys", "/dev", "/run", "/boot", "/root",
     "/etc/shadow", "/etc/passwd", "/etc/ssh",
+    # App code + data (auth tokens, DB). /app/data is also checked explicitly
+    # below for older callers, but blocking /app covers the source/static too.
+    "/app",
 }
 
 

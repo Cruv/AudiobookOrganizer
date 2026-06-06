@@ -733,8 +733,11 @@ def clean_query(title: str | None, author: str | None = None) -> str:
     if title:
         q = _clean_text(title)
         q = _strip_leading_number(q)
-        q = re.sub(r"\b\d{4}\b", "", q)  # strip years
-        q = re.sub(r"\s+", " ", q).strip()
+        # Strip years, but never reduce the title to nothing: a title that
+        # IS a bare 4-digit number ("1984", "2001") must survive as the query
+        # instead of being stripped, which would search by author alone.
+        without_year = re.sub(r"\s+", " ", re.sub(r"\b\d{4}\b", "", q)).strip()
+        q = without_year or q.strip()
         if q:
             parts.append(q)
     if author and not _is_suspect_author(author):

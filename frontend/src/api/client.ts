@@ -201,6 +201,10 @@ export const bulkUpdateBooks = (
 export const exportBooks = async (scanId?: number) => {
   const params = scanId != null ? `?scan_id=${scanId}` : '';
   const resp = await fetch(`${BASE}/books/export${params}`, { cache: 'no-store' });
+  if (!resp.ok) {
+    const error = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(error.detail || resp.statusText);
+  }
   return resp.json();
 };
 

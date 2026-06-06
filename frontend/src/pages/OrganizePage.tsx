@@ -72,6 +72,12 @@ export default function OrganizePage() {
       return;
     }
 
+    // The submitted books are now 'copying' server-side — drop them from the
+    // pending list and clear the selection immediately so they can't be
+    // re-selected and re-submitted while the copy runs.
+    setSelected(new Set());
+    queryClient.invalidateQueries({ queryKey: ['books'] });
+
     // executeOrganize copies in the background, so poll until none of the
     // submitted books are still 'copying'. We fetch the 'copying' list
     // fresh each tick rather than trusting the render-time `books` (which

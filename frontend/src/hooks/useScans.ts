@@ -5,6 +5,13 @@ export function useScans() {
   return useQuery({
     queryKey: ['scans'],
     queryFn: api.getScans,
+    // Poll while any scan is running so the history list reflects completion
+    // instead of spinning on 'running' forever (the detail query polls, but
+    // never refreshed this list).
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && data.some((s) => s.status === 'running') ? 2000 : false;
+    },
   });
 }
 

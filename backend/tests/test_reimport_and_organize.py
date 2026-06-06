@@ -16,6 +16,62 @@ from app.services.organizer import (
     _write_sidecar,
     preflight_disk_space,
 )
+from app.services.purger import purge_book
+
+
+def _fake_db():
+    return SimpleNamespace(commit=lambda: None)
+
+
+class TestPurgeInPlace:
+    """Purge must never delete a file that is its own destination."""
+
+    def test_inplace_original_is_not_deleted(self, tmp_path):
+        # mark-organized / sidecar-adopted books have destination_path ==
+        # original_path. That file IS the only copy — purge must skip it.
+        f = tmp_path / "book.m4b"
+        f.write_bytes(b"x" * 100)
+        bf = SimpleNamespace(
+            filename="book.m4b",
+            original_path=str(f),
+            destination_path=str(f),
+            file_size=100,
+            copy_status="copied",
+        )
+        book = SimpleNamespace(
+            id=1, title="T", author="A", files=[bf],
+            scanned_folder=None, purge_status="not_purged",
+        )
+        result = purge_book(book, _fake_db())
+        assert f.exists(), "in-place original must NOT be deleted"
+        assert result.success
+        assert result.files_deleted == 0
+        assert book.purge_status == "purged"
+
+    def test_separate_original_is_deleted(self, tmp_path):
+        # A normally-organized book (distinct source + dest) still purges.
+        src = tmp_path / "src" / "book.m4b"
+        src.parent.mkdir()
+        src.write_bytes(b"x" * 100)
+        dst = tmp_path / "lib" / "book.m4b"
+        dst.parent.mkdir()
+        dst.write_bytes(b"x" * 100)
+        bf = SimpleNamespace(
+            filename="book.m4b",
+            original_path=str(src),
+            destination_path=str(dst),
+            file_size=100,
+            copy_status="copied",
+        )
+        book = SimpleNamespace(
+            id=2, title="T", author="A", files=[bf],
+            scanned_folder=None, purge_status="not_purged",
+        )
+        result = purge_book(book, _fake_db())
+        assert not src.exists(), "separate original should be deleted"
+        assert dst.exists(), "destination copy must remain"
+        assert result.success
+        assert result.files_deleted == 1
 
 
 # --- preflight ---------------------------------------------------------

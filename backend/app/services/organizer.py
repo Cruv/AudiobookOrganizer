@@ -222,6 +222,11 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
     so the book can later be rebuilt from the output tree alone.
     """
     output_dir = build_output_path(book, pattern, output_root)
+    # Avoid clobbering a DIFFERENT book that already occupies this path. Two
+    # distinct books can resolve to the same dir under a lossy pattern, and
+    # the sidecar filename is fixed — so the second organize would overwrite
+    # the first's provenance. Re-organizing the SAME book reuses its dir.
+    output_dir = _resolve_output_dir(book, output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     book.output_path = output_dir
@@ -366,3 +371,41 @@ def _ensure_unique_path(path: str) -> str:
     while os.path.exists(f"{base} ({counter}){ext}"):
         counter += 1
     return f"{base} ({counter}){ext}"
+
+
+def _sidecar_is_same_book(sidecar_path: str, book: Book) -> bool:
+    """True if an existing sidecar describes the same book (by title+author)."""
+    try:
+        with open(sidecar_path, encoding="utf-8") as f:
+            data = json.load(f)
+        b = data.get("book", {})
+    except (OSError, ValueError, TypeError):
+        # Unreadable sidecar: treat as NOT ours so we never overwrite it.
+        return False
+
+    def norm(s: str | None) -> str:
+        return (s or "").strip().lower()
+
+    return norm(b.get("title")) == norm(book.title) and norm(
+        b.get("author")
+    ) == norm(book.author)
+
+
+def _resolve_output_dir(book: Book, output_dir: str) -> str:
+    """Pick a directory to organize ``book`` into without clobbering a
+    different book that already occupies ``output_dir``.
+
+    If the target already holds a sidecar for a *different* book, fall back
+    to a uniquified sibling directory ("… (2)", "… (3)", …). If it holds this
+    book's own sidecar (a re-organize), reuse it.
+    """
+    candidate = output_dir
+    counter = 1
+    while True:
+        sidecar = os.path.join(candidate, SIDECAR_FILENAME)
+        if not os.path.exists(sidecar):
+            return candidate
+        if _sidecar_is_same_book(sidecar, book):
+            return candidate
+        counter += 1
+        candidate = f"{output_dir} ({counter})"

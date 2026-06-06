@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SettingsResponse(BaseModel):
@@ -6,13 +6,18 @@ class SettingsResponse(BaseModel):
     output_root: str
     google_books_api_key: str | None
     audible_locale: str | None = None
+    registration_open: str | None = None
 
 
 class SettingsUpdate(BaseModel):
-    output_pattern: str | None = None
-    output_root: str | None = None
-    google_books_api_key: str | None = None
-    audible_locale: str | None = None
+    # registration_open was missing here, so the admin toggle's PUT body was
+    # silently dropped by Pydantic and never persisted. Length caps keep any
+    # single setting from storing an unbounded blob.
+    output_pattern: str | None = Field(default=None, max_length=512)
+    output_root: str | None = Field(default=None, max_length=4096)
+    google_books_api_key: str | None = Field(default=None, max_length=256)
+    audible_locale: str | None = Field(default=None, max_length=8)
+    registration_open: str | None = Field(default=None, max_length=8)
 
 
 class PatternPreview(BaseModel):

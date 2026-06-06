@@ -114,7 +114,10 @@ def list_books(
     if min_confidence is not None:
         query = query.filter(Book.confidence >= min_confidence)
     if max_confidence is not None:
-        query = query.filter(Book.confidence <= max_confidence)
+        # Exclusive upper bound so the UI's confidence buckets partition
+        # cleanly — [0,0.5) low, [0.5,0.8) medium, [0.8,inf) high — instead
+        # of a book at exactly 0.5/0.8 matching two buckets.
+        query = query.filter(Book.confidence < max_confidence)
     if search:
         search_term = f"%{search}%"
         query = query.filter(
@@ -784,7 +787,11 @@ def apply_lookup(
 
     result_data = None
     for entry in cache_entries:
-        results = json.loads(entry.response_json)
+        try:
+            results = json.loads(entry.response_json)
+        except (ValueError, TypeError):
+            # Skip a corrupt/partially-written cache row rather than 500.
+            continue
         if body.result_index < len(results):
             result_data = results[body.result_index]
             break
