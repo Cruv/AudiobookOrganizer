@@ -1,13 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { FolderOutput, Eye, FolderCheck } from 'lucide-react';
 import { useBooks } from '@/hooks/useBooks';
 import * as api from '@/api/client';
+import { useToast } from '@/components/Toast';
 import type { OrganizePreviewItem } from '@/types';
 import { ConfidenceBadge } from '@/components/ui/Badge';
 import { Button, Card, EmptyState, PageSkeleton } from '@/components/ui';
 
 export default function OrganizePage() {
-  const { data: booksData, isLoading, refetch } = useBooks({
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const { data: booksData, isLoading } = useBooks({
     confirmed: true,
     organize_status: 'pending',
     page_size: 200,
@@ -20,6 +24,15 @@ export default function OrganizePage() {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // Holds the active copy-progress poll so we can stop it on unmount.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(
+    () => () => {
+      if (pollRef.current !== null) clearInterval(pollRef.current);
+    },
+    [],
+  );
 
   const toggleSelect = (id: number) => {
     setSelected((prev) => {
@@ -53,22 +66,41 @@ export default function OrganizePage() {
     setIsOrganizing(true);
     try {
       await api.executeOrganize(ids);
-      const poll = setInterval(async () => {
-        await refetch();
-        const remaining = books?.filter(
-          (b) => ids.includes(b.id) && b.organize_status === 'copying',
-        );
-        if (!remaining || remaining.length === 0) {
-          clearInterval(poll);
-          setIsOrganizing(false);
-          setSelected(new Set());
-          setPreviews([]);
-          refetch();
-        }
-      }, 2000);
     } catch {
       setIsOrganizing(false);
+      toast.error('Failed to start organizing');
+      return;
     }
+
+    // executeOrganize copies in the background, so poll until none of the
+    // submitted books are still 'copying'. We fetch the 'copying' list
+    // fresh each tick rather than trusting the render-time `books` (which
+    // is filtered to 'pending' and could never show a copying book). Each
+    // book lands on 'copied' or 'failed', so this terminates; the tick cap
+    // is just a backstop against a crashed copy task.
+    const submitted = new Set(ids);
+    let ticks = 0;
+    const MAX_TICKS = 150; // ~5 min at 2s
+    if (pollRef.current !== null) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      ticks += 1;
+      let done = ticks >= MAX_TICKS;
+      try {
+        const copying = await api.getBooks({ organize_status: 'copying', page_size: 200 });
+        if (!copying.items.some((b) => submitted.has(b.id))) done = true;
+      } catch {
+        // transient fetch error — keep polling until the cap
+      }
+      if (done) {
+        if (pollRef.current !== null) clearInterval(pollRef.current);
+        pollRef.current = null;
+        setIsOrganizing(false);
+        setSelected(new Set());
+        setPreviews([]);
+        queryClient.invalidateQueries({ queryKey: ['books'] });
+        toast.success('Organize complete');
+      }
+    }, 2000);
   };
 
   if (isLoading) {

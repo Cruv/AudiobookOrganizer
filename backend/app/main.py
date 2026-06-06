@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-APP_VERSION = "1.11.1"
+APP_VERSION = "1.11.2"
 
 app = FastAPI(
     title="Audiobook Organizer",
@@ -159,8 +159,27 @@ def invalidate_has_users_cache() -> None:
 # Global API rate limiter (Huntarr had none)
 # --------------------------------------------------------------------------- #
 _api_requests: dict[str, list[float]] = {}
+_api_last_sweep = 0.0
 API_RATE_LIMIT = 120  # requests per window
 API_RATE_WINDOW = 60  # seconds
+
+
+def _sweep_api_requests(now: float) -> None:
+    """Evict IPs with no requests in the current window.
+
+    Without this the dict accrues one entry per distinct client IP ever
+    seen — a slow but unbounded memory leak. Runs at most once per window.
+    """
+    global _api_last_sweep
+    if now - _api_last_sweep < API_RATE_WINDOW:
+        return
+    _api_last_sweep = now
+    for ip in list(_api_requests.keys()):
+        recent = [t for t in _api_requests[ip] if now - t < API_RATE_WINDOW]
+        if recent:
+            _api_requests[ip] = recent
+        else:
+            del _api_requests[ip]
 
 
 def _get_client_ip(request: Request) -> str:
@@ -176,6 +195,7 @@ def _get_client_ip(request: Request) -> str:
 def _check_api_rate_limit(client_ip: str) -> bool:
     """Return True if request should be allowed."""
     now = time.monotonic()
+    _sweep_api_requests(now)
     attempts = _api_requests.get(client_ip, [])
     attempts = [t for t in attempts if now - t < API_RATE_WINDOW]
     _api_requests[client_ip] = attempts

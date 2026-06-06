@@ -110,52 +110,54 @@ async def _http_get_json(
     other than 429 fails fast — they're client errors, retrying won't help.
     """
     last_exc: Exception | None = None
-    for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
-        try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+    # One client (and connection pool) for every retry of this call instead
+    # of building and tearing one down per attempt.
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        for attempt in range(1, _HTTP_MAX_ATTEMPTS + 1):
+            try:
                 resp = await client.get(url, params=params)
 
-            if resp.status_code == 429 or resp.status_code >= 500:
-                # Respect Retry-After when present
-                delay = _HTTP_BASE_BACKOFF * (2 ** (attempt - 1))
-                try:
-                    retry_after = float(resp.headers.get("retry-after", "0"))
-                    delay = max(delay, retry_after)
-                except ValueError:
-                    pass
-                delay += random.uniform(0, 0.3)  # jitter
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    # Respect Retry-After when present
+                    delay = _HTTP_BASE_BACKOFF * (2 ** (attempt - 1))
+                    try:
+                        retry_after = float(resp.headers.get("retry-after", "0"))
+                        delay = max(delay, retry_after)
+                    except ValueError:
+                        pass
+                    delay += random.uniform(0, 0.3)  # jitter
+                    if attempt < _HTTP_MAX_ATTEMPTS:
+                        logger.info(
+                            "%s returned %d, retrying in %.1fs (attempt %d/%d)",
+                            provider, resp.status_code, delay, attempt, _HTTP_MAX_ATTEMPTS,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    resp.raise_for_status()
+
+                resp.raise_for_status()
+                return resp.json()
+
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                last_exc = e
                 if attempt < _HTTP_MAX_ATTEMPTS:
+                    delay = _HTTP_BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.3)
                     logger.info(
-                        "%s returned %d, retrying in %.1fs (attempt %d/%d)",
-                        provider, resp.status_code, delay, attempt, _HTTP_MAX_ATTEMPTS,
+                        "%s %s, retrying in %.1fs (attempt %d/%d)",
+                        provider, type(e).__name__, delay, attempt, _HTTP_MAX_ATTEMPTS,
                     )
                     await asyncio.sleep(delay)
                     continue
-                resp.raise_for_status()
-
-            resp.raise_for_status()
-            return resp.json()
-
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            last_exc = e
-            if attempt < _HTTP_MAX_ATTEMPTS:
-                delay = _HTTP_BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 0.3)
-                logger.info(
-                    "%s %s, retrying in %.1fs (attempt %d/%d)",
-                    provider, type(e).__name__, delay, attempt, _HTTP_MAX_ATTEMPTS,
-                )
-                await asyncio.sleep(delay)
-                continue
-            logger.warning("%s failed after %d attempts: %s", provider, attempt, type(e).__name__)
-            return None
-        except httpx.HTTPStatusError as e:
-            # 4xx other than 429: don't retry
-            logger.warning("%s returned %s", provider, e.response.status_code)
-            return None
-        except Exception as e:
-            last_exc = e
-            logger.warning("%s unexpected error: %s", provider, type(e).__name__)
-            return None
+                logger.warning("%s failed after %d attempts: %s", provider, attempt, type(e).__name__)
+                return None
+            except httpx.HTTPStatusError as e:
+                # 4xx other than 429: don't retry
+                logger.warning("%s returned %s", provider, e.response.status_code)
+                return None
+            except Exception as e:
+                last_exc = e
+                logger.warning("%s unexpected error: %s", provider, type(e).__name__)
+                return None
 
     if last_exc:
         logger.warning("%s giving up after %d attempts", provider, _HTTP_MAX_ATTEMPTS)

@@ -169,7 +169,9 @@ async def refresh_candidates(
             None,
         )
         if best_applicable:
-            apply_candidate(book, best_applicable, db)
+            # Auto-apply must never silently revert a user's manual title/
+            # author correction, so it preserves user-touched fields.
+            apply_candidate(book, best_applicable, db, respect_manual_edits=True)
         else:
             top = candidates[0]
             book.lookup_error = (
@@ -184,22 +186,33 @@ async def refresh_candidates(
     return candidates
 
 
-def apply_candidate(book: Book, candidate: LookupCandidate, db: Session) -> None:
+def apply_candidate(
+    book: Book,
+    candidate: LookupCandidate,
+    db: Session,
+    *,
+    respect_manual_edits: bool = False,
+) -> None:
     """Copy a candidate's fields onto the book and mark it applied.
 
-    Leaves fields the user explicitly set (where the book already has a
-    non-None value) alone for author/series/year/narrator; title and
-    author ARE overwritten from the candidate when present so re-apply
-    after editing still works.
+    series/year/narrator are only filled when the book doesn't already
+    have a value. title/author are normally overwritten from the candidate
+    (so a user who explicitly picks a candidate replaces them) — EXCEPT
+    when ``respect_manual_edits`` is True and the book was user-touched
+    (source "manual"/"user"). In that case the user's title/author and the
+    manual source marker are left intact, so auto-apply during a re-scan or
+    re-lookup can never silently revert a manual correction.
     """
     # Unmark any previously-applied candidate for this book.
     for c in book.candidates:
         if c.applied and c.id != candidate.id:
             c.applied = False
 
-    if candidate.title:
+    preserve_user = respect_manual_edits and book.source in ("manual", "user")
+
+    if candidate.title and not preserve_user:
         book.title = candidate.title
-    if candidate.author:
+    if candidate.author and not preserve_user:
         book.author = candidate.author
     if candidate.series and not book.series:
         book.series = candidate.series
@@ -210,7 +223,10 @@ def apply_candidate(book: Book, candidate: LookupCandidate, db: Session) -> None
     if candidate.narrator and not book.narrator:
         book.narrator = clean_narrator(candidate.narrator, book.edition)
 
-    book.source = f"auto:{candidate.provider}"
+    # Keep the manual/user source marker so future auto-applies keep
+    # respecting the user's edits; otherwise record the provider source.
+    if not preserve_user:
+        book.source = f"auto:{candidate.provider}"
     book.match_confidence = candidate.match_score
     # Keep the legacy single field in sync for the existing UI.
     book.confidence = max(book.parse_confidence, candidate.match_score)

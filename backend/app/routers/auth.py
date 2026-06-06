@@ -16,8 +16,24 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # Simple in-memory rate limiter for login attempts per IP
 _login_attempts: dict[str, list[float]] = {}
+_login_last_sweep = 0.0
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def _sweep_login_attempts(now: float) -> None:
+    """Evict IPs with no attempts in the current window so the dict stays
+    bounded to recently-active clients instead of every IP ever seen."""
+    global _login_last_sweep
+    if now - _login_last_sweep < LOGIN_WINDOW_SECONDS:
+        return
+    _login_last_sweep = now
+    for ip in list(_login_attempts.keys()):
+        recent = [t for t in _login_attempts[ip] if now - t < LOGIN_WINDOW_SECONDS]
+        if recent:
+            _login_attempts[ip] = recent
+        else:
+            del _login_attempts[ip]
 
 
 def _get_client_ip(request: Request) -> str:
@@ -32,6 +48,7 @@ def _get_client_ip(request: Request) -> str:
 def _check_rate_limit(client_ip: str) -> None:
     """Raise 429 if too many failed login attempts from this IP."""
     now = time.monotonic()
+    _sweep_login_attempts(now)
     attempts = _login_attempts.get(client_ip, [])
     # Prune old attempts
     attempts = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
