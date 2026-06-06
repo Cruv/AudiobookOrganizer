@@ -234,6 +234,11 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
     db.commit()
 
     all_success = True
+    # Track destination paths used in THIS run so two source files with the
+    # same basename don't collide — but DON'T uniquify against files already
+    # on disk, so re-organizing the same book overwrites its own prior copies
+    # (via staging -> os.replace) instead of duplicating them as "name (1)".
+    used_dest_paths: set[str] = set()
     for book_file in book.files:
         if not os.path.exists(book_file.original_path):
             logger.warning("Source file missing: %s", book_file.original_path)
@@ -242,7 +247,8 @@ def organize_book(book: Book, pattern: str, output_root: str, db: Session) -> No
             continue
 
         dest_path = os.path.join(output_dir, book_file.filename)
-        dest_path = _ensure_unique_path(dest_path)
+        dest_path = _ensure_unique_path(dest_path, used_dest_paths)
+        used_dest_paths.add(dest_path)
         staging_path = dest_path + STAGING_SUFFIX
 
         try:
@@ -361,14 +367,20 @@ def _write_sidecar(book: Book, output_dir: str) -> None:
     os.replace(tmp, sidecar_path)
 
 
-def _ensure_unique_path(path: str) -> str:
-    """If path exists, append (1), (2), etc. to make it unique."""
-    if not os.path.exists(path):
+def _ensure_unique_path(path: str, used: set[str]) -> str:
+    """Return a destination path not already claimed in THIS organize run.
+
+    Deduplicates against paths used in the current run (NOT files on disk), so
+    re-organizing the same book overwrites its own prior copies via the
+    staging -> os.replace path instead of duplicating them as "name (1)". Two
+    distinct source files that share a basename still get separate names.
+    """
+    if path not in used:
         return path
 
     base, ext = os.path.splitext(path)
     counter = 1
-    while os.path.exists(f"{base} ({counter}){ext}"):
+    while f"{base} ({counter}){ext}" in used:
         counter += 1
     return f"{base} ({counter}){ext}"
 

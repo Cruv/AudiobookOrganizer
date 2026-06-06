@@ -74,6 +74,59 @@ class TestPurgeInPlace:
         assert result.files_deleted == 1
 
 
+class TestReorganize:
+    """Re-organizing a book must overwrite its own files, not duplicate them."""
+
+    def test_dedupe_is_within_run_not_disk(self):
+        from app.services.organizer import _ensure_unique_path
+
+        used: set[str] = set()
+        p1 = _ensure_unique_path("/x/a.m4b", used)
+        used.add(p1)
+        p2 = _ensure_unique_path("/x/a.m4b", used)
+        used.add(p2)
+        p3 = _ensure_unique_path("/x/b.m4b", used)
+        assert p1 == "/x/a.m4b"
+        assert p2 == "/x/a (1).m4b"  # same name this run -> uniquified
+        assert p3 == "/x/b.m4b"      # fresh name -> untouched (not disk-checked)
+
+    def test_reorganize_same_book_does_not_duplicate_files(self, tmp_path):
+        from app.services.organizer import organize_book
+
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        src = src_dir / "audio.m4b"
+        src.write_bytes(b"a" * 50)
+        out_root = tmp_path / "lib"
+        out_root.mkdir()
+
+        bf = SimpleNamespace(
+            filename="audio.m4b",
+            original_path=str(src),
+            destination_path=None,
+            file_size=50,
+            copy_status="pending",
+            tag_title=None, tag_author=None, tag_album=None,
+            tag_year=None, tag_narrator=None,
+        )
+        book = SimpleNamespace(
+            id=1, title="Title", author="Author", series=None,
+            series_position=None, year=None, narrator=None, edition=None,
+            source="manual", confidence=0.9, is_confirmed=True,
+            output_path=None, organize_status="pending",
+            scanned_folder=SimpleNamespace(folder_path=str(src_dir)),
+            files=[bf],
+        )
+        pattern = "{Author}/{Title}"
+        organize_book(book, pattern, str(out_root), _fake_db())
+        bf.copy_status = "pending"  # re-run as if organizing again
+        organize_book(book, pattern, str(out_root), _fake_db())
+
+        out_dir = out_root / "Author" / "Title"
+        m4bs = sorted(p.name for p in out_dir.glob("*.m4b"))
+        assert m4bs == ["audio.m4b"], f"re-organize duplicated files: {m4bs}"
+
+
 # --- preflight ---------------------------------------------------------
 
 class TestPreflight:
