@@ -49,7 +49,13 @@ class ScannedFolder(Base):
 
     scan: Mapped["Scan"] = relationship(back_populates="folders")
     book: Mapped["Book | None"] = relationship(
-        back_populates="scanned_folder", uselist=False
+        back_populates="scanned_folder",
+        uselist=False,
+        # Deleting a folder (e.g. when its Scan is deleted) deletes the book
+        # parsed from it — and, via Book's own cascades, that book's files
+        # and lookup candidates. Without this, deleting a scan left orphaned
+        # Book rows that cluttered the Review page with un-scannable ghosts.
+        cascade="all, delete-orphan",
     )
 
 

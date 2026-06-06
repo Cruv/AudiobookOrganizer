@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from '@/api/client';
 
 export function useBooks(params?: {
@@ -17,6 +17,12 @@ export function useBooks(params?: {
   return useQuery({
     queryKey: ['books', params],
     queryFn: () => api.getBooks(params),
+    // Keep the previous page's data visible while a new query (different
+    // search/filter/page) loads. Without this, every keystroke-driven
+    // query-key change drops `data` to undefined, which made ReviewPage's
+    // `isLoading && !books` skeleton gate unmount the whole page — including
+    // the search input — wiping the user's text mid-type.
+    placeholderData: keepPreviousData,
     staleTime: 0,
   });
 }

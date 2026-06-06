@@ -101,46 +101,8 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
                 scan.processed_folders += 1
                 db.commit()
 
-        # Group multi-part folders (Part 01, Part 02, etc.) into single books
-        scan.status_detail = "Grouping multi-part audiobooks..."
-        db.commit()
-        _group_multipart_books(scan, db)
-
-        # Carry forward manual edits / confirmations from prior scans
-        # of folders at the same path (basic re-scan idempotency).
-        scan.status_detail = "Carrying forward manual edits..."
-        db.commit()
-        _carry_forward_manual_edits(scan, db)
-
-        # Detect duplicate books (same title+author, different paths)
-        scan.status_detail = "Checking for duplicates..."
-        db.commit()
-        _detect_duplicates(scan, db)
-
-        # Refresh lookup list after grouping and carry-forward. Skip books
-        # the user has already reviewed (is_confirmed=True) or frozen
-        # (locked=True) — both say "don't mutate this automatically".
-        books_for_lookup = (
-            db.query(Book)
-            .join(ScannedFolder)
-            .filter(
-                ScannedFolder.scan_id == scan.id,
-                Book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD,
-                Book.is_confirmed.is_(False),
-                Book.locked.is_(False),
-            )
-            .all()
-        )
-
-        # Auto-lookup for low-confidence books
-        if books_for_lookup:
-            scan.status_detail = f"Looking up {len(books_for_lookup)} books online..."
-            db.commit()
-            try:
-                asyncio.run(_auto_lookup_books(books_for_lookup, scan, db))
-            except RuntimeError:
-                # Already in an event loop (e.g. during tests)
-                pass
+        # Enrichment half: grouping, carry-forward, dedup, online lookup.
+        finalize_scan(scan, db)
 
         scan.status = "completed"
         scan.status_detail = None
@@ -154,6 +116,60 @@ def scan_directory(source_dir: str, db: Session) -> Scan:
         db.commit()
 
     return scan
+
+
+def finalize_scan(scan: Scan, db: Session) -> None:
+    """Post-process a freshly-parsed scan: group multi-part folders, carry
+    forward prior manual edits, flag duplicates, then run online auto-lookup
+    for the low-confidence books that remain.
+
+    This is the *enrichment* half of a scan — the part that turns raw folder
+    parses into identified books. Call it once, after every folder has been
+    processed. Both ``scan_directory`` and the production background task
+    (``scans._run_scan_with_id``) funnel through here so the two scan paths
+    can never drift apart again.
+    """
+    # Group multi-part folders (Part 01, Part 02, …) into single books.
+    scan.status_detail = "Grouping multi-part audiobooks..."
+    db.commit()
+    _group_multipart_books(scan, db)
+
+    # Carry forward manual edits / confirmations from prior scans of the
+    # same folder paths (basic re-scan idempotency).
+    scan.status_detail = "Carrying forward manual edits..."
+    db.commit()
+    _carry_forward_manual_edits(scan, db)
+
+    # Flag duplicate books (same title+author, different paths).
+    scan.status_detail = "Checking for duplicates..."
+    db.commit()
+    _detect_duplicates(scan, db)
+
+    # Build the lookup list AFTER grouping + carry-forward so we don't look
+    # up books that were merged away or already settled by the user. Skip
+    # confirmed (user-approved) and locked (frozen) books — both mean
+    # "don't mutate this automatically".
+    books_for_lookup = (
+        db.query(Book)
+        .join(ScannedFolder)
+        .filter(
+            ScannedFolder.scan_id == scan.id,
+            Book.confidence < AUTO_LOOKUP_CONFIDENCE_THRESHOLD,
+            Book.is_confirmed.is_(False),
+            Book.locked.is_(False),
+        )
+        .all()
+    )
+
+    if books_for_lookup:
+        scan.status_detail = f"Looking up {len(books_for_lookup)} books online..."
+        db.commit()
+        try:
+            asyncio.run(_auto_lookup_books(books_for_lookup, scan, db))
+        except RuntimeError:
+            # Already inside an event loop (e.g. during tests) — skip the
+            # online phase rather than crash the scan.
+            pass
 
 
 async def _auto_lookup_books(books: list[Book], scan: Scan, db: Session) -> None:

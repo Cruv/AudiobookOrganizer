@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db
 from app.models.book import Book
@@ -41,6 +41,25 @@ def _get_settings(db: Session) -> tuple[str, str]:
     return pattern, root
 
 
+def _safe_output_path(book: Book, pattern: str, root: str) -> str | None:
+    """Compute a book's projected output path, returning None instead of
+    raising.
+
+    build_output_path() raises ValueError on pathological inputs (e.g. a
+    pattern/metadata combination that resolves outside output_root). A
+    *projection* must never be able to 500 a mutation that already
+    committed (confirm/lock/edit) or break the export stream, so any
+    failure degrades to "no projected path" rather than an error.
+    """
+    try:
+        return build_output_path(book, pattern, root)
+    except Exception:
+        logger.warning(
+            "Could not build projected path for book %s", book.id, exc_info=True
+        )
+        return None
+
+
 def _attach_book_info(
     book: Book,
     resp: BookResponse,
@@ -61,7 +80,7 @@ def _attach_book_info(
         resp.folder_name = book.scanned_folder.folder_name
     if pattern is None or root is None:
         pattern, root = _get_settings(db)
-    resp.projected_path = build_output_path(book, pattern, root)
+    resp.projected_path = _safe_output_path(book, pattern, root)
 
 
 @router.get("", response_model=PaginatedBooksResponse)
@@ -144,7 +163,11 @@ def export_books(
     query = (
         db.query(Book)
         .outerjoin(ScannedFolder)
-        .options(joinedload(Book.scanned_folder), joinedload(Book.files))
+        # selectinload (not joinedload) for the files collection: joined
+        # eager loading of a collection is incompatible with yield_per and
+        # raises InvalidRequestError at iteration time — which 500'd this
+        # endpoint every time. selectinload streams in batches and works.
+        .options(joinedload(Book.scanned_folder), selectinload(Book.files))
     )
     if scan_id is not None:
         query = query.filter(ScannedFolder.scan_id == scan_id)
@@ -162,7 +185,7 @@ def export_books(
         for book in query.yield_per(50):
             folder_path = book.scanned_folder.folder_path if book.scanned_folder else None
             folder_name = book.scanned_folder.folder_name if book.scanned_folder else None
-            projected = build_output_path(book, pattern, root)
+            projected = _safe_output_path(book, pattern, root)
 
             first_file = book.files[0] if book.files else None
             tag_info = None
@@ -332,6 +355,15 @@ def confirm_book(book_id: int, db: Session = Depends(get_db)):
 @router.post("/confirm-batch")
 def confirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
     """Batch confirm books by IDs or confidence threshold."""
+    # Require an explicit selector. Without this guard an empty body falls
+    # through every branch below and confirms the ENTIRE library — a footgun
+    # that would flow unreviewed books straight to the Organize step.
+    if not body.book_ids and body.min_confidence is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Specify book_ids or min_confidence to confirm",
+        )
+
     query = db.query(Book)
 
     if body.book_ids:
@@ -466,7 +498,16 @@ def unconfirm_book(book_id: int, db: Session = Depends(get_db)):
 
 @router.post("/unconfirm-batch")
 def unconfirm_batch(body: BookConfirmBatch, db: Session = Depends(get_db)):
-    """Batch unconfirm books by IDs, confidence threshold, or all."""
+    """Batch unconfirm books by IDs, confidence threshold, or scan."""
+    # Require an explicit selector so a selector-less body can't silently
+    # unconfirm the entire library. The all-books "Reset All" path sends
+    # min_confidence=0 (matches every book) to mean "everything" explicitly.
+    if not body.book_ids and body.min_confidence is None and body.scan_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Specify book_ids, min_confidence, or scan_id to unconfirm",
+        )
+
     query = db.query(Book)
 
     if body.book_ids:

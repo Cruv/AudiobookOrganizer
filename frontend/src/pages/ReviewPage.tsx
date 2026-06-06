@@ -35,9 +35,8 @@ import BookEditModal from '@/components/BookEditModal';
 import SearchModal from '@/components/SearchModal';
 import CandidatesModal from '@/components/CandidatesModal';
 import BulkEditModal from '@/components/BulkEditModal';
-import SearchField from '@/components/SearchField';
 import { useToast } from '@/components/Toast';
-import { Button, Card, Select, EmptyState, PageSkeleton } from '@/components/ui';
+import { Button, Card, Input, Select, EmptyState, PageSkeleton } from '@/components/ui';
 import type { Book } from '@/types';
 
 const PAGE_SIZE = 50;
@@ -74,22 +73,23 @@ export default function ReviewPage() {
 
   const [sort, setSort] = useState(searchParams.get('sort') || 'confidence');
   const [page, setPage] = useState(Number(searchParams.get('page')) || 1);
-  // Initial search value is captured ONCE from the URL so the memoized
-  // SearchField's `initialValue` prop never changes identity. After
-  // that, all search updates flow through debouncedSearch only.
-  const [initialSearchValue] = useState(() => searchParams.get('search') || '');
-  const [debouncedSearch, setDebouncedSearch] = useState(initialSearchValue);
+  // The search box is a plain controlled input. `searchInput` is the live
+  // text; `debouncedSearch` is what actually drives the query and URL.
+  // This works cleanly now that useBooks keeps previous data on key change
+  // (placeholderData: keepPreviousData): the page no longer unmounts
+  // mid-type, so there's nothing to steal focus or wipe the field.
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(searchInput);
   const [filterEdition, setFilterEdition] = useState(searchParams.get('edition') || '');
   const [filterConfirmed, setFilterConfirmed] = useState(searchParams.get('confirmed') || '');
   const [filterConfidence, setFilterConfidence] = useState(searchParams.get('confidence') || '');
 
-  // Stable handler for the memoized SearchField. Depends on nothing so
-  // it has the same reference across every render; combined with the
-  // stable initialSearchValue, the SearchField's props never change
-  // identity, so React.memo prevents it from re-rendering at all.
-  const handleDebouncedSearch = useCallback((value: string) => {
-    setDebouncedSearch(value);
-  }, []);
+  // Debounce the live input into debouncedSearch (300ms after the last
+  // keystroke). The cleanup cancels the pending timer on each change.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   // Sync state to URL params.
   //
@@ -121,7 +121,7 @@ export default function ReviewPage() {
   const resetPage = useCallback(() => setPage(1), []);
   useEffect(() => { resetPage(); }, [debouncedSearch, filterEdition, filterConfirmed, filterConfidence, sort, resetPage]);
 
-  const { data: booksData, isLoading } = useBooks({
+  const { data: booksData, isLoading, isFetching } = useBooks({
     scan_id: scanId,
     sort,
     page,
@@ -204,14 +204,18 @@ export default function ReviewPage() {
   };
 
   const handleResetAllConfirmations = () => {
-    if (!confirm('Reset all confirmations for this scan?')) return;
-    unconfirmBatch.mutate(
-      { scan_id: scanId },
-      {
-        onSuccess: (data) => toast.success(`Unconfirmed ${data.unconfirmed} books`),
-        onError: () => toast.error('Failed to reset confirmations'),
-      },
-    );
+    const message = scanId
+      ? 'Reset all confirmations for this scan?'
+      : 'Reset confirmations for ALL books in every scan?';
+    if (!confirm(message)) return;
+    // Always send an explicit selector so the backend never falls back to
+    // "unconfirm everything" on an empty body. Scope by scan when we have
+    // one; otherwise min_confidence:0 matches every book ("all").
+    const selector = scanId ? { scan_id: scanId } : { min_confidence: 0 };
+    unconfirmBatch.mutate(selector, {
+      onSuccess: (data) => toast.success(`Unconfirmed ${data.unconfirmed} books`),
+      onError: () => toast.error('Failed to reset confirmations'),
+    });
   };
 
   if (isLoading && !books) {
@@ -272,17 +276,12 @@ export default function ReviewPage() {
       <Card className="mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="sm:col-span-2 lg:col-span-1">
-            {/* Memoized + stable-prop SearchField: React.memo + a
-                useState initializer for initialValue + useCallback for
-                the handler means this component never re-renders after
-                mount, no matter what state the rest of the page
-                churns through. That guarantees the <input> DOM node
-                is never touched by React and focus stays put. */}
-            <SearchField
+            <Input
               label="Search"
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Title or author..."
-              initialValue={initialSearchValue}
-              onDebouncedChange={handleDebouncedSearch}
             />
           </div>
           <Select
@@ -376,8 +375,12 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {/* Book list */}
-      <div className="space-y-2">
+      {/* Book list. Dim slightly while a new filter/search/page loads so
+          the refresh is visible without the list ever unmounting. */}
+      <div
+        className="space-y-2 transition-opacity"
+        style={{ opacity: isFetching ? 0.6 : 1 }}
+      >
         {books?.map((book) => (
           <Card
             key={book.id}

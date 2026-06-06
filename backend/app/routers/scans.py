@@ -110,7 +110,11 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
         from datetime import datetime, timezone
 
         from app.database import SessionLocal
-        from app.services.scanner import _find_audiobook_folders, _process_folder
+        from app.services.scanner import (
+            _find_audiobook_folders,
+            _process_folder,
+            finalize_scan,
+        )
 
         db = SessionLocal()
 
@@ -173,7 +177,24 @@ def _run_scan_with_id(scan_id: int, source_dir: str) -> None:
                 scan.processed_folders += 1
                 db.commit()
 
+        # Enrichment: group multi-part books, carry forward prior manual
+        # edits, flag duplicates, and run online auto-lookup. Wrapped so a
+        # hiccup in post-processing (e.g. a flaky lookup provider) still lets
+        # the scan finish — every folder is already parsed and committed.
+        try:
+            finalize_scan(scan, db)
+        except Exception:
+            db.rollback()
+            db.refresh(scan)
+            logger.warning(
+                "Scan %d: enrichment (grouping/lookup) failed; "
+                "completing with parse-only data",
+                scan_id,
+                exc_info=True,
+            )
+
         scan.status = "completed"
+        scan.status_detail = None
         scan.completed_at = datetime.now(timezone.utc)
         db.commit()
         logger.info("Scan %d: completed. %d folders processed.", scan_id, scan.processed_folders)

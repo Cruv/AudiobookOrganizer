@@ -11,7 +11,10 @@ class Book(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scanned_folder_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("scanned_folders.id"), unique=True, nullable=True
+        Integer,
+        ForeignKey("scanned_folders.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=True,
     )
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     author: Mapped[str | None] = mapped_column(Text, nullable=True)
